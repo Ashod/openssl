@@ -617,6 +617,9 @@ struct ssl_session_st
 #define SSL_OP_NO_TLSv1_2				0x08000000L
 #define SSL_OP_NO_TLSv1_1				0x10000000L
 
+#define SSL_OP_NO_DTLSv1				0x04000000L
+#define SSL_OP_NO_DTLSv1_2				0x08000000L
+
 #define SSL_OP_NO_SSL_MASK (SSL_OP_NO_SSLv2|SSL_OP_NO_SSLv3|\
 	SSL_OP_NO_TLSv1|SSL_OP_NO_TLSv1_1|SSL_OP_NO_TLSv1_2)
 
@@ -2111,6 +2114,14 @@ const SSL_METHOD *DTLSv1_method(void);		/* DTLSv1.0 */
 const SSL_METHOD *DTLSv1_server_method(void);	/* DTLSv1.0 */
 const SSL_METHOD *DTLSv1_client_method(void);	/* DTLSv1.0 */
 
+const SSL_METHOD *DTLSv1_2_method(void);	/* DTLSv1.2 */
+const SSL_METHOD *DTLSv1_2_server_method(void);	/* DTLSv1.2 */
+const SSL_METHOD *DTLSv1_2_client_method(void);	/* DTLSv1.2 */
+
+const SSL_METHOD *DTLS_method(void);		/* DTLS 1.0 and 1.2 */
+const SSL_METHOD *DTLS_server_method(void);	/* DTLS 1.0 and 1.2 */
+const SSL_METHOD *DTLS_client_method(void);	/* DTLS 1.0 and 1.2 */
+
 STACK_OF(SSL_CIPHER) *SSL_get_ciphers(const SSL *s);
 
 int SSL_do_handshake(SSL *s);
@@ -2713,6 +2724,7 @@ void ERR_load_SSL_strings(void);
 #define SSL_R_NULL_SSL_METHOD_PASSED			 196
 #define SSL_R_OLD_SESSION_CIPHER_NOT_RETURNED		 197
 #define SSL_R_OLD_SESSION_COMPRESSION_ALGORITHM_NOT_RETURNED 344
+#define SSL_R_ONLY_DTLS_1_2_ALLOWED_IN_SUITEB_MODE	 387
 #define SSL_R_ONLY_TLS_1_2_ALLOWED_IN_SUITEB_MODE	 379
 #define SSL_R_ONLY_TLS_ALLOWED_IN_FIPS_MODE		 297
 #define SSL_R_OPAQUE_PRF_INPUT_TOO_LONG			 327

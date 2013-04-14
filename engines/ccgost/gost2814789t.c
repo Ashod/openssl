@@ -1314,7 +1314,7 @@ int main(int argc, char *argv[])
     /* 
      * Internal function test on GostR3411_94_TestParamSet
      */
-    #ifdef OPENSSL_NO_DYNAMIC_ENGINE
+    #if 0 && defined(OPENSSL_NO_DYNAMIC_ENGINE)
     {
 	gost_ctx ctx;
 
@@ -1573,7 +1573,7 @@ engine_cipher_check:
 					(unsigned int)ullLeft);
 	    }
 	    siglen = 4;
-	    EVP_DigestSignFinal(&mctx, bTest, &siglen);
+	    OPENSSL_assert(EVP_DigestSignFinal(&mctx, bTest, &siglen));
 	    EVP_MD_CTX_cleanup(&mctx);
 	    enlu = (int)tcs[t].ullLen;
 	    enlf = 0;

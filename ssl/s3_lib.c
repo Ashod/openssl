@@ -2918,6 +2918,10 @@ SSL3_ENC_METHOD SSLv3_enc_data={
 	(int (*)(SSL *, unsigned char *, size_t, const char *,
 		 size_t, const unsigned char *, size_t,
 		 int use_context))ssl_undefined_function,
+	0,
+	SSL3_HM_HEADER_LENGTH,
+	ssl3_set_handshake_header,
+	ssl3_handshake_write
 	};
 
 long ssl3_default_timeout(void)
@@ -2946,6 +2950,20 @@ int ssl3_pending(const SSL *s)
 		return 0;
 	
 	return (s->s3->rrec.type == SSL3_RT_APPLICATION_DATA) ? s->s3->rrec.length : 0;
+	}
+
+void ssl3_set_handshake_header(SSL *s, int htype, unsigned long len)
+	{
+	unsigned char *p = (unsigned char *)s->init_buf->data;
+	*(p++) = htype;
+	l2n3(len, p);
+	s->init_num = (int)len + SSL3_HM_HEADER_LENGTH;
+	s->init_off = 0;
+	}
+
+int ssl3_handshake_write(SSL *s)
+	{
+	return ssl3_do_write(s, SSL3_RT_HANDSHAKE);
 	}
 
 int ssl3_new(SSL *s)
@@ -3354,7 +3372,7 @@ long ssl3_ctrl(SSL *s, int cmd, long larg, void *parg)
 
 #ifndef OPENSSL_NO_HEARTBEATS
 	case SSL_CTRL_TLS_EXT_SEND_HEARTBEAT:
-		if (SSL_version(s) == DTLS1_VERSION || SSL_version(s) == DTLS1_BAD_VER)
+		if (SSL_IS_DTLS(s))
 			ret = dtls1_heartbeat(s);
 		else
 			ret = tls1_heartbeat(s);
@@ -3475,7 +3493,7 @@ long ssl3_ctrl(SSL *s, int cmd, long larg, void *parg)
 		return ssl_cert_set_cert_store(s->cert, parg, 1, larg);
 
 	case SSL_CTRL_GET_PEER_SIGNATURE_NID:
-		if (TLS1_get_version(s) >= TLS1_2_VERSION)
+		if (SSL_USE_SIGALGS(s))
 			{
 			if (s->session && s->session->sess_cert)
 				{
@@ -4062,9 +4080,9 @@ SSL_CIPHER *ssl3_choose_cipher(SSL *s, STACK_OF(SSL_CIPHER) *clnt,
 		{
 		c=sk_SSL_CIPHER_value(prio,i);
 
-		/* Skip TLS v1.2 only ciphersuites if lower than v1.2 */
+		/* Skip TLS v1.2 only ciphersuites if not supported */
 		if ((c->algorithm_ssl & SSL_TLSV1_2) && 
-			(TLS1_get_version(s) < TLS1_2_VERSION))
+			!SSL_USE_TLS1_2_CIPHERS(s))
 			continue;
 
 		ssl_set_cert_masks(cert,c);
@@ -4440,15 +4458,15 @@ need to go to SSL_ST_ACCEPT.
 		}
 	return(ret);
 	}
-/* If we are using TLS v1.2 or later and default SHA1+MD5 algorithms switch
- * to new SHA256 PRF and handshake macs
+/* If we are using default SHA1+MD5 algorithms switch to new SHA256 PRF
+ * and handshake macs if required.
  */
 long ssl_get_algorithm2(SSL *s)
 	{
 	long alg2 = s->s3->tmp.new_cipher->algorithm2;
-	if (TLS1_get_version(s) >= TLS1_2_VERSION &&
-	    alg2 == (SSL_HANDSHAKE_MAC_DEFAULT|TLS1_PRF))
+	if (s->method->ssl3_enc->enc_flags & SSL_ENC_FLAG_SHA256_PRF
+	    && alg2 == (SSL_HANDSHAKE_MAC_DEFAULT|TLS1_PRF))
 		return SSL_HANDSHAKE_MAC_SHA256 | TLS1_PRF_SHA256;
 	return alg2;
 	}
-		
+

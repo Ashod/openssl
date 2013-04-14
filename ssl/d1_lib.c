@@ -67,11 +67,13 @@
 #endif
 
 static void get_current_time(struct timeval *t);
+static void dtls1_set_handshake_header(SSL *s, int type, unsigned long len);
+static int dtls1_handshake_write(SSL *s);
 const char dtls1_version_str[]="DTLSv1" OPENSSL_VERSION_PTEXT;
 int dtls1_listen(SSL *s, struct sockaddr *client);
 
 SSL3_ENC_METHOD DTLSv1_enc_data={
-    dtls1_enc,
+    	tls1_enc,
 	tls1_mac,
 	tls1_setup_key_block,
 	tls1_generate_master_secret,
@@ -83,6 +85,30 @@ SSL3_ENC_METHOD DTLSv1_enc_data={
 	TLS_MD_SERVER_FINISH_CONST,TLS_MD_SERVER_FINISH_CONST_SIZE,
 	tls1_alert_code,
 	tls1_export_keying_material,
+	SSL_ENC_FLAG_DTLS|SSL_ENC_FLAG_EXPLICIT_IV,
+	DTLS1_HM_HEADER_LENGTH,
+	dtls1_set_handshake_header,
+	dtls1_handshake_write	
+	};
+
+SSL3_ENC_METHOD DTLSv1_2_enc_data={
+    	tls1_enc,
+	tls1_mac,
+	tls1_setup_key_block,
+	tls1_generate_master_secret,
+	tls1_change_cipher_state,
+	tls1_final_finish_mac,
+	TLS1_FINISH_MAC_LENGTH,
+	tls1_cert_verify_mac,
+	TLS_MD_CLIENT_FINISH_CONST,TLS_MD_CLIENT_FINISH_CONST_SIZE,
+	TLS_MD_SERVER_FINISH_CONST,TLS_MD_SERVER_FINISH_CONST_SIZE,
+	tls1_alert_code,
+	tls1_export_keying_material,
+	SSL_ENC_FLAG_DTLS|SSL_ENC_FLAG_EXPLICIT_IV|SSL_ENC_FLAG_SIGALGS
+		|SSL_ENC_FLAG_SHA256_PRF|SSL_ENC_FLAG_TLS1_2_CIPHERS,
+	DTLS1_HM_HEADER_LENGTH,
+	dtls1_set_handshake_header,
+	dtls1_handshake_write	
 	};
 
 long dtls1_default_timeout(void)
@@ -196,6 +222,7 @@ void dtls1_free(SSL *s)
 	pqueue_free(s->d1->buffered_app_data.q);
 
 	OPENSSL_free(s->d1);
+	s->d1 = NULL;
 	}
 
 void dtls1_clear(SSL *s)
@@ -240,8 +267,10 @@ void dtls1_clear(SSL *s)
 	ssl3_clear(s);
 	if (s->options & SSL_OP_CISCO_ANYCONNECT)
 		s->version=DTLS1_BAD_VER;
+	else if (s->method->version == DTLS_ANY_VERSION)
+		s->version=DTLS1_2_VERSION;
 	else
-		s->version=DTLS1_VERSION;
+		s->version=s->method->version;
 	}
 
 long dtls1_ctrl(SSL *s, int cmd, long larg, void *parg)
@@ -483,4 +512,19 @@ int dtls1_listen(SSL *s, struct sockaddr *client)
 	
 	(void) BIO_dgram_get_peer(SSL_get_rbio(s), client);
 	return 1;
+	}
+
+static void dtls1_set_handshake_header(SSL *s, int htype, unsigned long len)
+	{
+	unsigned char *p = (unsigned char *)s->init_buf->data;
+	dtls1_set_message_header(s, p, htype, len, 0, len);
+	s->init_num = (int)len + DTLS1_HM_HEADER_LENGTH;
+	s->init_off = 0;
+	/* Buffer the message to handle re-xmits */
+	dtls1_buffer_message(s, 0);
+	}
+
+static int dtls1_handshake_write(SSL *s)
+	{
+	return dtls1_do_write(s, SSL3_RT_HANDSHAKE);
 	}

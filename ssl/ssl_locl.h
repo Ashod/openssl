@@ -438,8 +438,27 @@
 				(c)->algo_strength)
 #define SSL_C_EXPORT_PKEYLENGTH(c)	SSL_EXPORT_PKEYLENGTH((c)->algo_strength)
 
-
-
+/* Check if an SSL structure is using DTLS */
+#define SSL_IS_DTLS(s)	(s->method->ssl3_enc->enc_flags & SSL_ENC_FLAG_DTLS)
+/* See if we need explicit IV */
+#define SSL_USE_EXPLICIT_IV(s)	\
+		(s->method->ssl3_enc->enc_flags & SSL_ENC_FLAG_EXPLICIT_IV)
+/* See if we use signature algorithms extension
+ * and signature algorithm before signatures.
+ */
+#define SSL_USE_SIGALGS(s)	\
+			(s->method->ssl3_enc->enc_flags & SSL_ENC_FLAG_SIGALGS)
+/* Allow TLS 1.2 ciphersuites: applies to DTLS 1.2 as well as TLS 1.2:
+ * may apply to others in future.
+ */
+#define SSL_USE_TLS1_2_CIPHERS(s)	\
+		(s->method->ssl3_enc->enc_flags & SSL_ENC_FLAG_TLS1_2_CIPHERS)
+/* Determine if a client can use TLS 1.2 ciphersuites: can't rely on method
+ * flags because it may not be set to correct version yet.
+ */
+#define SSL_CLIENT_USE_TLS1_2_CIPHERS(s)	\
+		((SSL_IS_DTLS(s) && s->client_version <= DTLS1_2_VERSION) || \
+		(!SSL_IS_DTLS(s) && s->client_version >= TLS1_2_VERSION))
 
 /* Mostly for SSLv3 */
 #define SSL_PKEY_RSA_ENC	0
@@ -678,7 +697,37 @@ typedef struct ssl3_enc_method
 				      const char *, size_t,
 				      const unsigned char *, size_t,
 				      int use_context);
+	/* Various flags indicating protocol version requirements */
+	unsigned int enc_flags;
+	/* Handshake header length */
+	unsigned int hhlen;
+	/* Set the handshake header */
+	void (*set_handshake_header)(SSL *s, int type, unsigned long len);
+	/* Write out handshake message */
+	int (*do_write)(SSL *s);
 	} SSL3_ENC_METHOD;
+
+#define SSL_HM_HEADER_LENGTH(s)	s->method->ssl3_enc->hhlen
+#define ssl_handshake_start(s) \
+	(((unsigned char *)s->init_buf->data) + s->method->ssl3_enc->hhlen)
+#define ssl_set_handshake_header(s, htype, len) \
+	s->method->ssl3_enc->set_handshake_header(s, htype, len)
+#define ssl_do_write(s)  s->method->ssl3_enc->do_write(s)
+
+/* Values for enc_flags */
+
+/* Uses explicit IV for CBC mode */
+#define SSL_ENC_FLAG_EXPLICIT_IV	0x1
+/* Uses signature algorithms extension */
+#define SSL_ENC_FLAG_SIGALGS		0x2
+/* Uses SHA256 default PRF */
+#define SSL_ENC_FLAG_SHA256_PRF		0x4
+/* Is DTLS */
+#define SSL_ENC_FLAG_DTLS		0x8
+/* Allow TLS 1.2 ciphersuites: applies to DTLS 1.2 as well as TLS 1.2:
+ * may apply to others in future.
+ */
+#define SSL_ENC_FLAG_TLS1_2_CIPHERS	0x10
 
 #ifndef OPENSSL_NO_COMP
 /* Used for holding the relevant compression methods loaded into SSL_CTX */
@@ -712,11 +761,14 @@ OPENSSL_EXTERN SSL_CIPHER ssl3_ciphers[];
 SSL_METHOD *ssl_bad_method(int ver);
 
 extern SSL3_ENC_METHOD TLSv1_enc_data;
+extern SSL3_ENC_METHOD TLSv1_1_enc_data;
+extern SSL3_ENC_METHOD TLSv1_2_enc_data;
 extern SSL3_ENC_METHOD SSLv3_enc_data;
 extern SSL3_ENC_METHOD DTLSv1_enc_data;
+extern SSL3_ENC_METHOD DTLSv1_2_enc_data;
 
 #define IMPLEMENT_tls_meth_func(version, func_name, s_accept, s_connect, \
-				s_get_meth) \
+				s_get_meth, enc_data) \
 const SSL_METHOD *func_name(void)  \
 	{ \
 	static const SSL_METHOD func_name##_data= { \
@@ -745,7 +797,7 @@ const SSL_METHOD *func_name(void)  \
 		ssl3_get_cipher, \
 		s_get_meth, \
 		tls1_default_timeout, \
-		&TLSv1_enc_data, \
+		&enc_data, \
 		ssl_undefined_void_function, \
 		ssl3_callback_ctrl, \
 		ssl3_ctx_callback_ctrl, \
@@ -819,7 +871,7 @@ const SSL_METHOD *func_name(void)  \
 	ssl23_get_cipher, \
 	s_get_meth, \
 	ssl23_default_timeout, \
-	&ssl3_undef_enc_method, \
+	&TLSv1_2_enc_data, \
 	ssl_undefined_void_function, \
 	ssl3_callback_ctrl, \
 	ssl3_ctx_callback_ctrl, \
@@ -864,11 +916,12 @@ const SSL_METHOD *func_name(void)  \
 	return &func_name##_data; \
 	}
 
-#define IMPLEMENT_dtls1_meth_func(func_name, s_accept, s_connect, s_get_meth) \
+#define IMPLEMENT_dtls1_meth_func(version, func_name, s_accept, s_connect, \
+					s_get_meth, enc_data) \
 const SSL_METHOD *func_name(void)  \
 	{ \
 	static const SSL_METHOD func_name##_data= { \
-		DTLS1_VERSION, \
+		version, \
 		dtls1_new, \
 		dtls1_clear, \
 		dtls1_free, \
@@ -893,7 +946,7 @@ const SSL_METHOD *func_name(void)  \
 		dtls1_get_cipher, \
 		s_get_meth, \
 		dtls1_default_timeout, \
-		&DTLSv1_enc_data, \
+		&enc_data, \
 		ssl_undefined_void_function, \
 		ssl3_callback_ctrl, \
 		ssl3_ctx_callback_ctrl, \
@@ -1043,6 +1096,9 @@ void ssl3_record_sequence_update(unsigned char *seq);
 int ssl3_do_change_cipher_spec(SSL *ssl);
 long ssl3_default_timeout(void );
 
+void ssl3_set_handshake_header(SSL *s, int htype, unsigned long len);
+int ssl3_handshake_write(SSL *s);
+
 int ssl23_num_ciphers(void );
 const SSL_CIPHER *ssl23_get_cipher(unsigned int u);
 int ssl23_read(SSL *s, void *buf, int len);
@@ -1114,9 +1170,6 @@ int ssl3_send_next_proto(SSL *s);
 #endif
 
 int dtls1_client_hello(SSL *s);
-int dtls1_send_client_certificate(SSL *s);
-int dtls1_send_client_key_exchange(SSL *s);
-int dtls1_send_client_verify(SSL *s);
 
 /* some server-only functions */
 int ssl3_get_client_hello(SSL *s);
@@ -1132,15 +1185,6 @@ int ssl3_get_cert_verify(SSL *s);
 #ifndef OPENSSL_NO_NEXTPROTONEG
 int ssl3_get_next_proto(SSL *s);
 #endif
-
-int dtls1_send_hello_request(SSL *s);
-int dtls1_send_server_hello(SSL *s);
-int dtls1_send_server_certificate(SSL *s);
-int dtls1_send_server_key_exchange(SSL *s);
-int dtls1_send_certificate_request(SSL *s);
-int dtls1_send_server_done(SSL *s);
-
-
 
 int ssl23_accept(SSL *s);
 int ssl23_connect(SSL *s);

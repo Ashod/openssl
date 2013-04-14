@@ -140,6 +140,49 @@ SSL3_ENC_METHOD TLSv1_enc_data={
 	TLS_MD_SERVER_FINISH_CONST,TLS_MD_SERVER_FINISH_CONST_SIZE,
 	tls1_alert_code,
 	tls1_export_keying_material,
+	0,
+	SSL3_HM_HEADER_LENGTH,
+	ssl3_set_handshake_header,
+	ssl3_handshake_write
+	};
+
+SSL3_ENC_METHOD TLSv1_1_enc_data={
+	tls1_enc,
+	tls1_mac,
+	tls1_setup_key_block,
+	tls1_generate_master_secret,
+	tls1_change_cipher_state,
+	tls1_final_finish_mac,
+	TLS1_FINISH_MAC_LENGTH,
+	tls1_cert_verify_mac,
+	TLS_MD_CLIENT_FINISH_CONST,TLS_MD_CLIENT_FINISH_CONST_SIZE,
+	TLS_MD_SERVER_FINISH_CONST,TLS_MD_SERVER_FINISH_CONST_SIZE,
+	tls1_alert_code,
+	tls1_export_keying_material,
+	SSL_ENC_FLAG_EXPLICIT_IV,
+	SSL3_HM_HEADER_LENGTH,
+	ssl3_set_handshake_header,
+	ssl3_handshake_write
+	};
+
+SSL3_ENC_METHOD TLSv1_2_enc_data={
+	tls1_enc,
+	tls1_mac,
+	tls1_setup_key_block,
+	tls1_generate_master_secret,
+	tls1_change_cipher_state,
+	tls1_final_finish_mac,
+	TLS1_FINISH_MAC_LENGTH,
+	tls1_cert_verify_mac,
+	TLS_MD_CLIENT_FINISH_CONST,TLS_MD_CLIENT_FINISH_CONST_SIZE,
+	TLS_MD_SERVER_FINISH_CONST,TLS_MD_SERVER_FINISH_CONST_SIZE,
+	tls1_alert_code,
+	tls1_export_keying_material,
+	SSL_ENC_FLAG_EXPLICIT_IV|SSL_ENC_FLAG_SIGALGS|SSL_ENC_FLAG_SHA256_PRF
+		|SSL_ENC_FLAG_TLS1_2_CIPHERS,
+	SSL3_HM_HEADER_LENGTH,
+	ssl3_set_handshake_header,
+	ssl3_handshake_write
 	};
 
 long tls1_default_timeout(void)
@@ -966,8 +1009,8 @@ void ssl_set_client_disabled(SSL *s)
 	int have_rsa = 0, have_dsa = 0, have_ecdsa = 0;
 	c->mask_a = 0;
 	c->mask_k = 0;
-	/* If less than TLS 1.2 don't allow TLS 1.2 only ciphers */
-	if (TLS1_get_client_version(s) < TLS1_2_VERSION)
+	/* Don't allow TLS 1.2 only ciphers if we don't suppport them */
+	if (!SSL_CLIENT_USE_TLS1_2_CIPHERS(s))
 		c->mask_ssl = SSL_TLSV1_2;
 	else
 		c->mask_ssl = 0;
@@ -1053,7 +1096,7 @@ unsigned char *ssl_add_clienthello_tlsext(SSL *s, unsigned char *p, unsigned cha
 #ifndef OPENSSL_NO_EC
 	/* See if we support any ECC ciphersuites */
 	int using_ecc = 0;
-	if (s->version != DTLS1_VERSION && s->version >= TLS1_VERSION)
+	if (s->version >= TLS1_VERSION || SSL_IS_DTLS(s))
 		{
 		int i;
 		unsigned long alg_k, alg_a;
@@ -1255,7 +1298,7 @@ unsigned char *ssl_add_clienthello_tlsext(SSL *s, unsigned char *p, unsigned cha
 		}
 		skip_ext:
 
-	if (TLS1_get_client_version(s) >= TLS1_2_VERSION)
+	if (SSL_USE_SIGALGS(s))
 		{
 		size_t salglen;
 		const unsigned char *salg;
@@ -1270,8 +1313,7 @@ unsigned char *ssl_add_clienthello_tlsext(SSL *s, unsigned char *p, unsigned cha
 		}
 
 #ifdef TLSEXT_TYPE_opaque_prf_input
-	if (s->s3->client_opaque_prf_input != NULL &&
-	    s->version != DTLS1_VERSION)
+	if (s->s3->client_opaque_prf_input != NULL)
 		{
 		size_t col = s->s3->client_opaque_prf_input_len;
 		
@@ -1288,8 +1330,7 @@ unsigned char *ssl_add_clienthello_tlsext(SSL *s, unsigned char *p, unsigned cha
 		}
 #endif
 
-	if (s->tlsext_status_type == TLSEXT_STATUSTYPE_ocsp &&
-	    s->version != DTLS1_VERSION)
+	if (s->tlsext_status_type == TLSEXT_STATUSTYPE_ocsp)
 		{
 		int i;
 		long extlen, idlen, itmp;
@@ -1461,7 +1502,7 @@ unsigned char *ssl_add_serverhello_tlsext(SSL *s, unsigned char *p, unsigned cha
         }
 
 #ifndef OPENSSL_NO_EC
-	if (using_ecc && s->version != DTLS1_VERSION)
+	if (using_ecc)
 		{
 		const unsigned char *plist;
 		size_t plistlen;
@@ -1504,8 +1545,7 @@ unsigned char *ssl_add_serverhello_tlsext(SSL *s, unsigned char *p, unsigned cha
 		}
 
 #ifdef TLSEXT_TYPE_opaque_prf_input
-	if (s->s3->server_opaque_prf_input != NULL &&
-	    s->version != DTLS1_VERSION)
+	if (s->s3->server_opaque_prf_input != NULL)
 		{
 		size_t sol = s->s3->server_opaque_prf_input_len;
 		
@@ -1867,8 +1907,7 @@ static int ssl_scan_clienthello_tlsext(SSL *s, unsigned char **p, unsigned char 
 #endif
 
 #ifndef OPENSSL_NO_EC
-		else if (type == TLSEXT_TYPE_ec_point_formats &&
-	             s->version != DTLS1_VERSION)
+		else if (type == TLSEXT_TYPE_ec_point_formats)
 			{
 			unsigned char *sdata = data;
 			int ecpointformatlist_length = *(sdata++);
@@ -1903,8 +1942,7 @@ static int ssl_scan_clienthello_tlsext(SSL *s, unsigned char **p, unsigned char 
 			fprintf(stderr,"\n");
 #endif
 			}
-		else if (type == TLSEXT_TYPE_elliptic_curves &&
-	             s->version != DTLS1_VERSION)
+		else if (type == TLSEXT_TYPE_elliptic_curves)
 			{
 			unsigned char *sdata = data;
 			int ellipticcurvelist_length = (*(sdata++) << 8);
@@ -1942,8 +1980,7 @@ static int ssl_scan_clienthello_tlsext(SSL *s, unsigned char **p, unsigned char 
 			}
 #endif /* OPENSSL_NO_EC */
 #ifdef TLSEXT_TYPE_opaque_prf_input
-		else if (type == TLSEXT_TYPE_opaque_prf_input &&
-	             s->version != DTLS1_VERSION)
+		else if (type == TLSEXT_TYPE_opaque_prf_input)
 			{
 			unsigned char *sdata = data;
 
@@ -2018,8 +2055,8 @@ static int ssl_scan_clienthello_tlsext(SSL *s, unsigned char **p, unsigned char 
 				return 0;
 				}
 			}
-		else if (type == TLSEXT_TYPE_status_request &&
-		         s->version != DTLS1_VERSION && s->ctx->tlsext_status_cb)
+		else if (type == TLSEXT_TYPE_status_request
+		         && s->ctx->tlsext_status_cb)
 			{
 		
 			if (size < 5) 
@@ -2349,8 +2386,7 @@ static int ssl_scan_serverhello_tlsext(SSL *s, unsigned char **p, unsigned char 
 			}
 
 #ifndef OPENSSL_NO_EC
-		else if (type == TLSEXT_TYPE_ec_point_formats &&
-	             s->version != DTLS1_VERSION)
+		else if (type == TLSEXT_TYPE_ec_point_formats)
 			{
 			unsigned char *sdata = data;
 			int ecpointformatlist_length = *(sdata++);
@@ -2396,8 +2432,7 @@ static int ssl_scan_serverhello_tlsext(SSL *s, unsigned char **p, unsigned char 
 			s->tlsext_ticket_expected = 1;
 			}
 #ifdef TLSEXT_TYPE_opaque_prf_input
-		else if (type == TLSEXT_TYPE_opaque_prf_input &&
-	             s->version != DTLS1_VERSION)
+		else if (type == TLSEXT_TYPE_opaque_prf_input)
 			{
 			unsigned char *sdata = data;
 
@@ -2427,8 +2462,7 @@ static int ssl_scan_serverhello_tlsext(SSL *s, unsigned char **p, unsigned char 
 				}
 			}
 #endif
-		else if (type == TLSEXT_TYPE_status_request &&
-		         s->version != DTLS1_VERSION)
+		else if (type == TLSEXT_TYPE_status_request)
 			{
 			/* MUST be empty and only sent if we've requested
 			 * a status request message.
@@ -2989,7 +3023,7 @@ int tls1_process_ticket(SSL *s, unsigned char *session_id, int len,
 	if (p >= limit)
 		return -1;
 	/* Skip past DTLS cookie */
-	if (s->version == DTLS1_VERSION || s->version == DTLS1_BAD_VER)
+	if (SSL_IS_DTLS(s))
 		{
 		i = *(p++);
 		p+= i;
@@ -3416,8 +3450,8 @@ int tls1_process_sigalgs(SSL *s, const unsigned char *data, int dsize)
 	const EVP_MD *md;
 	CERT *c = s->cert;
 	TLS_SIGALGS *sigptr;
-	/* Extension ignored for TLS versions below 1.2 */
-	if (TLS1_get_version(s) < TLS1_2_VERSION)
+	/* Extension ignored for inappropriate versions */
+	if (!SSL_USE_SIGALGS(s))
 		return 1;
 	/* Should never happen */
 	if (!c)

@@ -724,7 +724,7 @@ int tls1_enc(SSL *s, int send)
 			int ivlen;
 			enc=EVP_CIPHER_CTX_cipher(s->enc_write_ctx);
 			/* For TLSv1.1 and later explicit IV */
-			if (s->version >= TLS1_1_VERSION
+			if (SSL_USE_EXPLICIT_IV(s)
 				&& EVP_CIPHER_mode(enc) == EVP_CIPH_CBC_MODE)
 				ivlen = EVP_CIPHER_iv_length(enc);
 			else
@@ -779,7 +779,7 @@ int tls1_enc(SSL *s, int send)
 
 			seq = send?s->s3->write_sequence:s->s3->read_sequence;
 
-			if (s->version == DTLS1_VERSION || s->version == DTLS1_BAD_VER)
+			if (SSL_IS_DTLS(s))
 				{
 				unsigned char dtlsseq[9],*p=dtlsseq;
 
@@ -1008,7 +1008,7 @@ int tls1_mac(SSL *ssl, unsigned char *md, int send)
 			mac_ctx = &hmac;
 		}
 
-	if (ssl->version == DTLS1_VERSION || ssl->version == DTLS1_BAD_VER)
+	if (SSL_IS_DTLS(ssl))
 		{
 		unsigned char dtlsseq[8],*p=dtlsseq;
 
@@ -1071,7 +1071,7 @@ printf("rec=");
 {unsigned int z; for (z=0; z<rec->length; z++) printf("%02X ",buf[z]); printf("\n"); }
 #endif
 
-	if (ssl->version != DTLS1_VERSION && ssl->version != DTLS1_BAD_VER)
+	if (!SSL_IS_DTLS(ssl))
 		{
 		for (i=7; i>=0; i--)
 			{

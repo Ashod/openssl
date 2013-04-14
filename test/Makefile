@@ -12,7 +12,7 @@ PERL=		perl
 # KRB5 stuff
 KRB5_INCLUDES=
 LIBKRB5=
-TEST=		fips_algvs.c
+TEST=		fips_algvs.c igetest.c
 
 PEX_LIBS=
 EX_LIBS= #-lnsl -lsocket
@@ -192,67 +192,67 @@ alltests: \
 	test_jpake test_srp test_cms test_v3name test_ocsp \
 	test_gost2814789
 
-test_evp:
+test_evp: $(EVPTEST) evptests.txt
 	../util/shlib_wrap.sh ./$(EVPTEST) evptests.txt
 
-test_des:
+test_des: $(DESTEST)
 	../util/shlib_wrap.sh ./$(DESTEST)
 
-test_idea:
+test_idea: $(IDEATEST)
 	../util/shlib_wrap.sh ./$(IDEATEST)
 
-test_sha:
+test_sha: $(SHATEST) $(SHA1TEST) $(SHA256TEST) $(SHA512TEST)
 	../util/shlib_wrap.sh ./$(SHATEST)
 	../util/shlib_wrap.sh ./$(SHA1TEST)
 	../util/shlib_wrap.sh ./$(SHA256TEST)
 	../util/shlib_wrap.sh ./$(SHA512TEST)
 
-test_mdc2:
+test_mdc2: $(MDC2TEST)
 	../util/shlib_wrap.sh ./$(MDC2TEST)
 
-test_md5:
+test_md5: $(MD5TEST)
 	../util/shlib_wrap.sh ./$(MD5TEST)
 
-test_md4:
+test_md4: $(MD4TEST)
 	../util/shlib_wrap.sh ./$(MD4TEST)
 
-test_hmac:
+test_hmac: $(HMACTEST)
 	../util/shlib_wrap.sh ./$(HMACTEST)
 
-test_wp:
+test_wp: $(WPTEST)
 	../util/shlib_wrap.sh ./$(WPTEST)
 
-test_md2:
+test_md2: $(MD2TEST)
 	../util/shlib_wrap.sh ./$(MD2TEST)
 
-test_rmd:
+test_rmd: $(RMDTEST)
 	../util/shlib_wrap.sh ./$(RMDTEST)
 
-test_bf:
+test_bf: $(BFTEST)
 	../util/shlib_wrap.sh ./$(BFTEST)
 
-test_cast:
+test_cast: $(CASTTEST)
 	../util/shlib_wrap.sh ./$(CASTTEST)
 
-test_rc2:
+test_rc2: $(RC2TEST)
 	../util/shlib_wrap.sh ./$(RC2TEST)
 
-test_rc4:
+test_rc4: $(RC4TEST)
 	../util/shlib_wrap.sh ./$(RC4TEST)
 
-test_rc5:
+test_rc5: $(RC5TEST)
 	../util/shlib_wrap.sh ./$(RC5TEST)
 
-test_rand:
+test_rand: $(RANDTEST)
 	../util/shlib_wrap.sh ./$(RANDTEST)
 
-test_gost2814789:
+test_gost2814789: $(GOST2814789TEST)
 	../util/shlib_wrap.sh ./$(GOST2814789TEST)
 
-test_enc:
+test_enc: ../apps/openssl testenc
 	@sh ./testenc
 
-test_x509:
+test_x509: ../apps/openssl tx509 testx509.pem v3-cert1.pem v3-cert2.pem
 	echo test normal x509v1 certificate
 	sh ./tx509 2>/dev/null
 	echo test first x509v3 certificate
@@ -260,25 +260,25 @@ test_x509:
 	echo test second x509v3 certificate
 	sh ./tx509 v3-cert2.pem 2>/dev/null
 
-test_rsa: $(RSATEST)$(EXE_EXT)
+test_rsa: $(RSATEST)$(EXE_EXT) ../apps/openssl trsa testrsa.pem
 	@sh ./trsa 2>/dev/null
 	../util/shlib_wrap.sh ./$(RSATEST)
 
-test_crl:
+test_crl: ../apps/openssl tcrl testcrl.pem
 	@sh ./tcrl 2>/dev/null
 
-test_sid:
+test_sid: ../apps/openssl tsid testsid.pem
 	@sh ./tsid 2>/dev/null
 
-test_req:
+test_req: ../apps/openssl treq testreq.pem testreq2.pem
 	@sh ./treq 2>/dev/null
 	@sh ./treq testreq2.pem 2>/dev/null
 
-test_pkcs7:
+test_pkcs7: ../apps/openssl tpkcs7 tpkcs7d testp7.pem pkcs7-1.pem
 	@sh ./tpkcs7 2>/dev/null
 	@sh ./tpkcs7d 2>/dev/null
 
-test_bn:
+test_bn: $(BNTEST) $(EXPTEST) bctest
 	@echo starting big number library test, could take a while...
 	@../util/shlib_wrap.sh ./$(BNTEST) >tmp.bntest
 	@echo quit >>tmp.bntest
@@ -287,44 +287,45 @@ test_bn:
 	@echo 'test a^b%c implementations'
 	../util/shlib_wrap.sh ./$(EXPTEST)
 
-test_ec:
+test_ec: $(ECTEST)
 	@echo 'test elliptic curves'
 	../util/shlib_wrap.sh ./$(ECTEST)
 
-test_ecdsa:
+test_ecdsa: $(ECDSATEST)
 	@echo 'test ecdsa'
 	../util/shlib_wrap.sh ./$(ECDSATEST)
 
-test_ecdh:
+test_ecdh: $(ECDHTEST)
 	@echo 'test ecdh'
 	../util/shlib_wrap.sh ./$(ECDHTEST)
 
-test_verify:
+test_verify: ../apps/openssl
 	@echo "The following command should have some OK's and some failures"
 	@echo "There are definitly a few expired certificates"
 	../util/shlib_wrap.sh ../apps/openssl verify -CApath ../certs/demo ../certs/demo/*.pem
 
-test_dh:
+test_dh: $(DHTEST)
 	@echo "Generate a set of DH parameters"
 	../util/shlib_wrap.sh ./$(DHTEST)
 
-test_dsa:
+test_dsa: $(DSATEST)
 	@echo "Generate a set of DSA parameters"
 	../util/shlib_wrap.sh ./$(DSATEST)
 	../util/shlib_wrap.sh ./$(DSATEST) -app2_1
 
-test_gen:
+test_gen testreq.pem: ../apps/openssl testgen test.cnf
 	@echo "Generate and verify a certificate request"
 	@sh ./testgen
 
 test_ss keyU.ss certU.ss certCA.ss certP1.ss keyP1.ss certP2.ss keyP2.ss \
-		intP1.ss intP2.ss: testss
+		intP1.ss intP2.ss: testss CAss.cnf Uss.cnf P1ss.cnf P2ss.cnf \
+                                   ../apps/openssl
 	@echo "Generate and certify a test certificate"
 	@sh ./testss
 	@cat certCA.ss certU.ss > intP1.ss
 	@cat certCA.ss certU.ss certP1.ss > intP2.ss
 
-test_engine: 
+test_engine: $(ENGINETEST)
 	@echo "Manipulate the ENGINE structures"
 	../util/shlib_wrap.sh ./$(ENGINETEST)
 
@@ -336,7 +337,7 @@ test_ssl: keyU.ss certU.ss certCA.ss certP1.ss keyP1.ss certP2.ss keyP2.ss \
 	@sh ./testsslproxy keyP1.ss certP1.ss intP1.ss
 	@sh ./testsslproxy keyP2.ss certP2.ss intP2.ss
 
-test_ca:
+test_ca: ../apps/openssl testca CAss.cnf Uss.cnf
 	@if ../util/shlib_wrap.sh ../apps/openssl no-rsa; then \
 	  echo "skipping CA.sh test -- requires RSA"; \
 	else \
@@ -348,7 +349,7 @@ test_aes: #$(AESTEST)
 #	@echo "test Rijndael"
 #	../util/shlib_wrap.sh ./$(AESTEST)
 
-test_tsa:
+test_tsa: ../apps/openssl testtsa CAtsa.cnf ../util/shlib_wrap.sh
 	@if ../util/shlib_wrap.sh ../apps/openssl no-rsa; then \
 	  echo "skipping testtsa test -- requires RSA"; \
 	else \
@@ -363,7 +364,7 @@ test_jpake: $(JPAKETEST)$(EXE_EXT)
 	@echo "Test JPAKE"
 	../util/shlib_wrap.sh ./$(JPAKETEST)
 
-test_cms:
+test_cms: ../apps/openssl cms-test.pl smcont.txt
 	@echo "CMS consistency test"
 	$(PERL) cms-test.pl
 
@@ -375,7 +376,7 @@ test_v3name: $(V3NAMETEST)$(EXE_EXT)
 	@echo "Test X509v3_check_*"
 	../util/shlib_wrap.sh ./$(V3NAMETEST)
 
-test_ocsp:
+test_ocsp: ../apps/openssl tocsp
 	@echo "Test OCSP"
 	@sh ./tocsp
 
@@ -847,6 +848,20 @@ fips_test_suite.o: ../include/openssl/opensslv.h ../include/openssl/ossl_typ.h
 fips_test_suite.o: ../include/openssl/rand.h ../include/openssl/safestack.h
 fips_test_suite.o: ../include/openssl/sha.h ../include/openssl/stack.h
 fips_test_suite.o: ../include/openssl/symhacks.h fips_test_suite.c
+gost2814789t.o: ../engines/ccgost/gost89.h ../include/openssl/asn1.h
+gost2814789t.o: ../include/openssl/bio.h ../include/openssl/buffer.h
+gost2814789t.o: ../include/openssl/conf.h ../include/openssl/crypto.h
+gost2814789t.o: ../include/openssl/e_os2.h ../include/openssl/ec.h
+gost2814789t.o: ../include/openssl/ecdh.h ../include/openssl/ecdsa.h
+gost2814789t.o: ../include/openssl/engine.h ../include/openssl/err.h
+gost2814789t.o: ../include/openssl/evp.h ../include/openssl/hmac.h
+gost2814789t.o: ../include/openssl/lhash.h ../include/openssl/obj_mac.h
+gost2814789t.o: ../include/openssl/objects.h ../include/openssl/opensslconf.h
+gost2814789t.o: ../include/openssl/opensslv.h ../include/openssl/ossl_typ.h
+gost2814789t.o: ../include/openssl/pkcs7.h ../include/openssl/safestack.h
+gost2814789t.o: ../include/openssl/sha.h ../include/openssl/stack.h
+gost2814789t.o: ../include/openssl/symhacks.h ../include/openssl/x509.h
+gost2814789t.o: ../include/openssl/x509_vfy.h gost2814789t.c
 hmactest.o: ../e_os.h ../include/openssl/asn1.h ../include/openssl/bio.h
 hmactest.o: ../include/openssl/crypto.h ../include/openssl/e_os2.h
 hmactest.o: ../include/openssl/evp.h ../include/openssl/hmac.h
