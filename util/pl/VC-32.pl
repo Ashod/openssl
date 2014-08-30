@@ -11,10 +11,6 @@ if ($fips && !$shlib)
 	$crypto="libeayfips32";
 	$crypto_compat = "libeaycompat32.lib";
 	}
-else
-	{
-	$crypto="libeay32";
-	}
 
 if ($fipscanisterbuild)
 	{
@@ -122,7 +118,7 @@ elsif ($FLAVOR =~ /CE/)
     }
 
     $cc=($ENV{CC} or "cl");
-    $base_cflags=' /W3 /WX /GF /Gy /nologo -DUNICODE -D_UNICODE -DOPENSSL_SYSNAME_WINCE -DWIN32_LEAN_AND_MEAN -DL_ENDIAN -DDSO_WIN32 -DNO_CHMOD -DOPENSSL_SMALL_FOOTPRINT';
+    $base_cflags=' /W3 /WX /GF /Gy /Zi /nologo -DUNICODE -D_UNICODE -DOPENSSL_SYSNAME_WINCE -DWIN32_LEAN_AND_MEAN -DL_ENDIAN -DDSO_WIN32 -DNO_CHMOD -DOPENSSL_SMALL_FOOTPRINT';
     $base_cflags.=" $wcecdefs";
     $base_cflags.=' -I$(WCECOMPAT)/include'		if (defined($ENV{'WCECOMPAT'}));
     $base_cflags.=' -I$(PORTSDK_LIBPATH)/../../include'	if (defined($ENV{'PORTSDK_LIBPATH'}));
@@ -163,8 +159,8 @@ else
 
 # generate symbols.pdb unconditionally
 $app_cflag.=" /Zi /Fd\$(TMP_D)/app";
-$lib_cflag.=" /Zi /Fd\$(TMP_D)/lib";
-$lflags.=" /debug";
+$lib_cflag.=" /Zi";
+$lflags.=" /debug"; # /DYNAMICBASE
 
 $lflags.=" /fixed" if ($fips && $FLAVOR !~ /WIN64/);
 
@@ -309,7 +305,7 @@ sub do_lib_rule
 	my($objs,$target,$name,$shlib,$ign,$base_addr) = @_;
 	local($ret);
 
-	$taget =~ s/\//$o/g if $o ne '/';
+	$target =~ s/\//$o/g if $o ne '/';
 	my $base_arg;
 	if ($base_addr ne "")
 		{
