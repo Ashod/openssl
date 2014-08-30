@@ -262,7 +262,12 @@ int EVP_PKEY_asn1_add_alias(int to, int from)
 	if (!ameth)
 		return 0;
 	ameth->pkey_base_id = to;
-	return EVP_PKEY_asn1_add0(ameth);
+	if (!EVP_PKEY_asn1_add0(ameth))
+		{
+		EVP_PKEY_asn1_free(ameth);
+		return 0;
+		}
+	return 1;
 	}
 
 int EVP_PKEY_asn1_get0_info(int *ppkey_id, int *ppkey_base_id, int *ppkey_flags,
@@ -462,3 +467,10 @@ void EVP_PKEY_asn1_set_ctrl(EVP_PKEY_ASN1_METHOD *ameth,
 	{
 	ameth->pkey_ctrl = pkey_ctrl;
 	}
+
+void EVP_PKEY_asn1_set_security_bits(EVP_PKEY_ASN1_METHOD *ameth,
+				int (*pkey_security_bits)(const EVP_PKEY *pk))
+	{
+	ameth->pkey_security_bits = pkey_security_bits;
+	}
+

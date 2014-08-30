@@ -58,22 +58,30 @@
 #include <openssl/err.h>
 #include <openssl/cms.h>
 #include "cms_lcl.h"
+#include "asn1_locl.h"
+
+static BIO *cms_get_text_bio(BIO *out, unsigned int flags)
+	{
+	BIO *rbio;
+	if (out == NULL)
+		rbio = BIO_new(BIO_s_null());
+	else if (flags & CMS_TEXT)
+		{
+		rbio = BIO_new(BIO_s_mem());
+		BIO_set_mem_eof_return(rbio, 0);
+		}
+	else
+		rbio = out;
+	return rbio;
+	}
 
 static int cms_copy_content(BIO *out, BIO *in, unsigned int flags)
 	{
 	unsigned char buf[4096];
 	int r = 0, i;
-	BIO *tmpout = NULL;
+	BIO *tmpout;
 
-	if (out == NULL)
-		tmpout = BIO_new(BIO_s_null());
-	else if (flags & CMS_TEXT)
-		{
-		tmpout = BIO_new(BIO_s_mem());
-		BIO_set_mem_eof_return(tmpout, 0);
-		}
-	else
-		tmpout = out;
+	tmpout = cms_get_text_bio(out, flags);
 
 	if(!tmpout)
 		{
@@ -141,7 +149,7 @@ static void do_free_upto(BIO *f, BIO *upto)
 			BIO_free(f);
 			f = tbio;
 			}
-		while (f != upto);
+		while (f && f != upto);
 		}
 	else
 		BIO_free_all(f);
@@ -322,10 +330,16 @@ int CMS_verify(CMS_ContentInfo *cms, STACK_OF(X509) *certs,
 	STACK_OF(X509_CRL) *crls = NULL;
 	X509 *signer;
 	int i, scount = 0, ret = 0;
-	BIO *cmsbio = NULL, *tmpin = NULL;
+	BIO *cmsbio = NULL, *tmpin = NULL, *tmpout = NULL;
 
 	if (!dcont && !check_content(cms))
 		return 0;
+	if (dcont && !(flags & CMS_BINARY))
+		{
+		const ASN1_OBJECT *coid = CMS_get0_eContentType(cms);
+		if (OBJ_obj2nid(coid) == NID_id_ct_asciiTextWithCRLF)
+			flags |= CMS_ASCIICRLF;
+		}
 
 	/* Attempt to find all signer certificates */
 
@@ -405,15 +419,48 @@ int CMS_verify(CMS_ContentInfo *cms, STACK_OF(X509) *certs,
 		}
 	else
 		tmpin = dcont;
-		
+	/* If not binary mode and detached generate digests by *writing*
+	 * through the BIO. That makes it possible to canonicalise the
+	 * input.
+	 */
+	if (!(flags & SMIME_BINARY) && dcont)
+		{
+		/* Create output BIO so we can either handle text or to
+		 * ensure included content doesn't override detached content.
+		 */
+		tmpout = cms_get_text_bio(out, flags);
+		if(!tmpout)
+			{
+			CMSerr(CMS_F_CMS_VERIFY,ERR_R_MALLOC_FAILURE);
+			goto err;
+			}
+		cmsbio = CMS_dataInit(cms, tmpout);
+		if (!cmsbio)
+			goto err;
+		/* Don't use SMIME_TEXT for verify: it adds headers and
+		 * we want to remove them.
+		 */
+		SMIME_crlf_copy(dcont, cmsbio, flags & ~SMIME_TEXT);
 
-	cmsbio=CMS_dataInit(cms, tmpin);
-	if (!cmsbio)
-		goto err;
+		if(flags & CMS_TEXT)
+			{
+			if (!SMIME_text(tmpout, out))
+				{
+				CMSerr(CMS_F_CMS_VERIFY,CMS_R_SMIME_TEXT_ERROR);
+				goto err;
+				}
+			}
+		}
+	else
+		{
+		cmsbio=CMS_dataInit(cms, tmpin);
+		if (!cmsbio)
+			goto err;
 
-	if (!cms_copy_content(out, cmsbio, flags))
-		goto err;
+		if (!cms_copy_content(out, cmsbio, flags))
+			goto err;
 
+		}
 	if (!(flags & CMS_NO_CONTENT_VERIFY))
 		{
 		for (i = 0; i < sk_CMS_SignerInfo_num(sinfos); i++)
@@ -431,11 +478,23 @@ int CMS_verify(CMS_ContentInfo *cms, STACK_OF(X509) *certs,
 	ret = 1;
 
 	err:
-	
-	if (dcont && (tmpin == dcont))
-		do_free_upto(cmsbio, dcont);
+	if (!(flags & SMIME_BINARY) && dcont)
+		{
+		do_free_upto(cmsbio, tmpout);
+		if (tmpin != dcont)
+			BIO_free(tmpin);
+		}
 	else
-		BIO_free_all(cmsbio);
+		{
+
+		if (dcont && (tmpin == dcont))
+			do_free_upto(cmsbio, dcont);
+		else
+			BIO_free_all(cmsbio);
+		}
+
+	if (tmpout && out != tmpout)
+		BIO_free_all(tmpout);
 
 	if (cms_certs)
 		sk_X509_pop_free(cms_certs, X509_free);
@@ -466,6 +525,8 @@ CMS_ContentInfo *CMS_sign(X509 *signcert, EVP_PKEY *pkey, STACK_OF(X509) *certs,
 	cms = CMS_ContentInfo_new();
 	if (!cms || !CMS_SignedData_init(cms))
 		goto merr;
+	if (flags & CMS_ASCIICRLF && !CMS_set1_eContentType(cms, OBJ_nid2obj(NID_id_ct_asciiTextWithCRLF)))
+		goto err;
 
 	if (pkey && !CMS_add1_signer(cms, signcert, pkey, NULL, flags))
 		{
@@ -606,24 +667,66 @@ CMS_ContentInfo *CMS_encrypt(STACK_OF(X509) *certs, BIO *data,
 	return NULL;
 	}
 
+static int cms_kari_set1_pkey(CMS_ContentInfo *cms, CMS_RecipientInfo *ri,
+						EVP_PKEY *pk, X509 *cert)
+	{
+	int i;
+	STACK_OF(CMS_RecipientEncryptedKey) *reks;
+	CMS_RecipientEncryptedKey *rek;
+	reks = CMS_RecipientInfo_kari_get0_reks(ri);
+	if (!cert)
+		return 0;
+	for (i = 0; i < sk_CMS_RecipientEncryptedKey_num(reks); i++)
+		{
+		int rv;
+		rek = sk_CMS_RecipientEncryptedKey_value(reks, i);
+		if (CMS_RecipientEncryptedKey_cert_cmp(rek, cert))
+			continue;
+		CMS_RecipientInfo_kari_set0_pkey(ri, pk);
+		rv = CMS_RecipientInfo_kari_decrypt(cms, ri, rek);
+		CMS_RecipientInfo_kari_set0_pkey(ri, NULL);
+		if (rv > 0)
+			return 1;
+		return -1;
+		}
+	return 0;
+	}
+
 int CMS_decrypt_set1_pkey(CMS_ContentInfo *cms, EVP_PKEY *pk, X509 *cert)
 	{
 	STACK_OF(CMS_RecipientInfo) *ris;
 	CMS_RecipientInfo *ri;
-	int i, r;
-	int debug = 0;
+	int i, r, ri_type;
+	int debug = 0, match_ri = 0;
 	ris = CMS_get0_RecipientInfos(cms);
 	if (ris)
 		debug = cms->d.envelopedData->encryptedContentInfo->debug;
+	ri_type = cms_pkey_get_ri_type(pk);
+	if (ri_type == CMS_RECIPINFO_NONE)
+		{
+		CMSerr(CMS_F_CMS_DECRYPT_SET1_PKEY,
+					CMS_R_NOT_SUPPORTED_FOR_THIS_KEY_TYPE);
+		return 0;
+		}
+
 	for (i = 0; i < sk_CMS_RecipientInfo_num(ris); i++)
 		{
 		ri = sk_CMS_RecipientInfo_value(ris, i);
-		if (CMS_RecipientInfo_type(ri) != CMS_RECIPINFO_TRANS)
+		if (CMS_RecipientInfo_type(ri) != ri_type)
 				continue;
+		match_ri = 1;
+		if (ri_type == CMS_RECIPINFO_AGREE)
+			{
+			r = cms_kari_set1_pkey(cms, ri, pk, cert);
+			if (r > 0)
+				return 1;
+			if (r < 0)
+				return 0;
+			}
 		/* If we have a cert try matching RecipientInfo
 		 * otherwise try them all.
 		 */
-		if (!cert || (CMS_RecipientInfo_ktri_cert_cmp(ri, cert) == 0))
+		else if (!cert || !CMS_RecipientInfo_ktri_cert_cmp(ri, cert))
 			{
 			CMS_RecipientInfo_set0_pkey(ri, pk);
 			r = CMS_RecipientInfo_decrypt(cms, ri);
@@ -655,7 +758,7 @@ int CMS_decrypt_set1_pkey(CMS_ContentInfo *cms, EVP_PKEY *pk, X509 *cert)
 			}
 		}
 	/* If no cert and not debugging always return success */
-	if (!cert && !debug)
+	if (match_ri && !cert && !debug)
 		{
 		ERR_clear_error();
 		return 1;

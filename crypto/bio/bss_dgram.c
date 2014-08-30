@@ -577,10 +577,10 @@ static long dgram_ctrl(BIO *b, int cmd, long num, void *ptr)
 			ret = -1;
 			break;
 			}
-		ret = -1;
 #else
-		break;
+		ret = -1;
 #endif
+		break;
 	case BIO_CTRL_DGRAM_QUERY_MTU:
 #if defined(OPENSSL_SYS_LINUX) && defined(IP_MTU)
 		addr_len = (socklen_t)sizeof(addr);
@@ -951,11 +951,11 @@ BIO *BIO_new_dgram_sctp(int fd, int close_flag)
 	 * already, otherwise the connected socket won't use it. */
 	sockopt_len = (socklen_t)(sizeof(sctp_assoc_t) + 256 * sizeof(uint8_t));
 	authchunks = OPENSSL_malloc(sockopt_len);
-	memset(authchunks, 0, sizeof(sockopt_len));
+	memset(authchunks, 0, sockopt_len);
 	ret = getsockopt(fd, IPPROTO_SCTP, SCTP_LOCAL_AUTH_CHUNKS, authchunks, &sockopt_len);
 	OPENSSL_assert(ret >= 0);
-	
-	for (p = (unsigned char*) authchunks + sizeof(sctp_assoc_t);
+
+	for (p = (unsigned char*) authchunks->gauth_chunks;
 	     p < (unsigned char*) authchunks + sockopt_len;
 	     p += sizeof(uint8_t))
 		{
@@ -1241,11 +1241,11 @@ static int dgram_sctp_read(BIO *b, char *out, int outl)
 
 			optlen = (socklen_t)(sizeof(sctp_assoc_t) + 256 * sizeof(uint8_t));
 			authchunks = OPENSSL_malloc(optlen);
-			memset(authchunks, 0, sizeof(optlen));
+			memset(authchunks, 0, optlen);
 			ii = getsockopt(b->num, IPPROTO_SCTP, SCTP_PEER_AUTH_CHUNKS, authchunks, &optlen);
 			OPENSSL_assert(ii >= 0);
 
-			for (p = (unsigned char*) authchunks + sizeof(sctp_assoc_t);
+			for (p = (unsigned char*) authchunks->gauth_chunks;
 				 p < (unsigned char*) authchunks + optlen;
 				 p += sizeof(uint8_t))
 				{
@@ -1381,7 +1381,7 @@ static long dgram_sctp_ctrl(BIO *b, int cmd, long num, void *ptr)
 	bio_dgram_sctp_data *data = NULL;
 	socklen_t sockopt_len = 0;
 	struct sctp_authkeyid authkeyid;
-	struct sctp_authkey *authkey;
+	struct sctp_authkey *authkey = NULL;
 
 	data = (bio_dgram_sctp_data *)b->ptr;
 
@@ -1436,6 +1436,11 @@ static long dgram_sctp_ctrl(BIO *b, int cmd, long num, void *ptr)
 		/* Add new key */
 		sockopt_len = sizeof(struct sctp_authkey) + 64 * sizeof(uint8_t);
 		authkey = OPENSSL_malloc(sockopt_len);
+		if (authkey == NULL)
+			{
+			ret = -1;
+			break;
+			}
 		memset(authkey, 0x00, sockopt_len);
 		authkey->sca_keynumber = authkeyid.scact_keynumber + 1;
 #ifndef __FreeBSD__
@@ -1447,6 +1452,8 @@ static long dgram_sctp_ctrl(BIO *b, int cmd, long num, void *ptr)
 		memcpy(&authkey->sca_key[0], ptr, 64 * sizeof(uint8_t));
 
 		ret = setsockopt(b->num, IPPROTO_SCTP, SCTP_AUTH_KEY, authkey, sockopt_len);
+		OPENSSL_free(authkey);
+		authkey = NULL;
 		if (ret < 0) break;
 
 		/* Reset active key */
@@ -1901,7 +1908,11 @@ static void get_current_time(struct timeval *t)
 
 	GetSystemTime(&st);
 	SystemTimeToFileTime(&st,&now.ft);
+#ifdef	__MINGW32__
+	now.ul -= 116444736000000000ULL;
+#else
 	now.ul -= 116444736000000000UI64;	/* re-bias to 1/1/1970 */
+#endif
 	t->tv_sec  = (long)(now.ul/10000000);
 	t->tv_usec = ((int)(now.ul%10000000))/10;
 #elif defined(OPENSSL_SYS_VMS)

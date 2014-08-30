@@ -157,6 +157,11 @@
 extern "C" {
 #endif
 
+/* Default security level if not overriden at config time */
+#ifndef OPENSSL_TLS_SECURITY_LEVEL
+#define OPENSSL_TLS_SECURITY_LEVEL 1
+#endif
+
 #define TLS1_ALLOW_EXPERIMENTAL_CIPHERSUITES	0
 
 #define TLS1_2_VERSION			0x0303
@@ -206,11 +211,9 @@ extern "C" {
 #define TLSEXT_TYPE_status_request		5
 /* ExtensionType values from RFC4681 */
 #define TLSEXT_TYPE_user_mapping		6
-
 /* ExtensionType values from RFC5878 */
 #define TLSEXT_TYPE_client_authz		7
 #define TLSEXT_TYPE_server_authz		8
-
 /* ExtensionType values from RFC6091 */
 #define TLSEXT_TYPE_cert_type		9
 
@@ -229,6 +232,19 @@ extern "C" {
 
 /* ExtensionType value from RFC5620 */
 #define TLSEXT_TYPE_heartbeat	15
+
+/* ExtensionType value from draft-ietf-tls-applayerprotoneg-00 */
+#define TLSEXT_TYPE_application_layer_protocol_negotiation 16
+
+/* ExtensionType value for TLS padding extension.
+ * http://www.iana.org/assignments/tls-extensiontype-values/tls-extensiontype-values.xhtml
+ * http://tools.ietf.org/html/draft-agl-tls-padding-03
+ */
+#define TLSEXT_TYPE_padding	21
+/* Extension type for Encrypt-then-MAC
+ * http://www.ietf.org/id/draft-ietf-tls-encrypt-then-mac-02.txt
+ */
+#define TLSEXT_TYPE_encrypt_then_mac	22
 
 /* ExtensionType value from RFC4507 */
 #define TLSEXT_TYPE_session_ticket		35
@@ -293,14 +309,6 @@ extern "C" {
 #ifndef OPENSSL_NO_TLSEXT
 
 #define TLSEXT_MAXLEN_host_name 255
-
-/* From RFC 5878 */
-#define TLSEXT_SUPPLEMENTALDATATYPE_authz_data 16386
-/* This is not IANA assigned. See
- * https://www.iana.org/assignments/tls-parameters/tls-parameters.xml#authorization-data-rules */
-#define TLSEXT_AUTHZDATAFORMAT_audit_proof 182
-
-#define TLSEXT_MAXLEN_supplemental_data 1024*16 /* Let's limit to 16k */
 
 const char *SSL_get_servername(const SSL *s, const int type);
 int SSL_get_servername_type(const SSL *s);
@@ -386,13 +394,6 @@ SSL_CTX_ctrl(ctx,SSL_CTRL_SET_TLSEXT_OPAQUE_PRF_INPUT_CB_ARG, 0, arg)
 
 #define SSL_CTX_set_tlsext_ticket_key_cb(ssl, cb) \
 SSL_CTX_callback_ctrl(ssl,SSL_CTRL_SET_TLSEXT_TICKET_KEY_CB,(void (*)(void))cb)
-
-/* Used by clients to process audit proofs. */
-#define SSL_CTX_set_tlsext_authz_server_audit_proof_cb(ctx, cb) \
-SSL_CTX_callback_ctrl(ctx, SSL_CTRL_SET_TLSEXT_AUTHZ_SERVER_AUDIT_PROOF_CB,(void (*)(void))cb)
-
-#define SSL_CTX_set_tlsext_authz_server_audit_proof_cb_arg(ctx, arg) \
-SSL_CTX_ctrl(ctx, SSL_CTRL_SET_TLSEXT_AUTHZ_SERVER_AUDIT_PROOF_CB_ARG, 0, arg);
 
 #ifndef OPENSSL_NO_HEARTBEATS
 #define SSL_TLSEXT_HB_ENABLED				0x01
@@ -496,6 +497,21 @@ SSL_CTX_ctrl(ctx, SSL_CTRL_SET_TLSEXT_AUTHZ_SERVER_AUDIT_PROOF_CB_ARG, 0, arg);
 #define TLS1_CK_ADH_WITH_AES_128_GCM_SHA256		0x030000A6
 #define TLS1_CK_ADH_WITH_AES_256_GCM_SHA384		0x030000A7
 
+/* TLS 1.2 Camellia SHA-256 ciphersuites from RFC5932 */
+#define TLS1_CK_RSA_WITH_CAMELLIA_128_CBC_SHA256		0x030000BA
+#define TLS1_CK_DH_DSS_WITH_CAMELLIA_128_CBC_SHA256		0x030000BB
+#define TLS1_CK_DH_RSA_WITH_CAMELLIA_128_CBC_SHA256		0x030000BC
+#define TLS1_CK_DHE_DSS_WITH_CAMELLIA_128_CBC_SHA256		0x030000BD
+#define TLS1_CK_DHE_RSA_WITH_CAMELLIA_128_CBC_SHA256		0x030000BE
+#define TLS1_CK_ADH_WITH_CAMELLIA_128_CBC_SHA256		0x030000BF
+
+#define TLS1_CK_RSA_WITH_CAMELLIA_256_CBC_SHA256		0x030000C0
+#define TLS1_CK_DH_DSS_WITH_CAMELLIA_256_CBC_SHA256		0x030000C1
+#define TLS1_CK_DH_RSA_WITH_CAMELLIA_256_CBC_SHA256		0x030000C2
+#define TLS1_CK_DHE_DSS_WITH_CAMELLIA_256_CBC_SHA256		0x030000C3
+#define TLS1_CK_DHE_RSA_WITH_CAMELLIA_256_CBC_SHA256		0x030000C4
+#define TLS1_CK_ADH_WITH_CAMELLIA_256_CBC_SHA256		0x030000C5
+
 /* ECC ciphersuites from draft-ietf-tls-ecc-12.txt with changes soon to be in draft 13 */
 #define TLS1_CK_ECDH_ECDSA_WITH_NULL_SHA                0x0300C001
 #define TLS1_CK_ECDH_ECDSA_WITH_RC4_128_SHA             0x0300C002
@@ -559,13 +575,23 @@ SSL_CTX_ctrl(ctx, SSL_CTRL_SET_TLSEXT_AUTHZ_SERVER_AUDIT_PROOF_CB_ARG, 0, arg);
 #define TLS1_CK_ECDH_RSA_WITH_AES_128_GCM_SHA256        0x0300C031
 #define TLS1_CK_ECDH_RSA_WITH_AES_256_GCM_SHA384        0x0300C032
 
+/* Camellia-CBC ciphersuites from RFC6367 */
+#define TLS1_CK_ECDHE_ECDSA_WITH_CAMELLIA_128_CBC_SHA256 0x0300C072
+#define TLS1_CK_ECDHE_ECDSA_WITH_CAMELLIA_256_CBC_SHA384 0x0300C073
+#define TLS1_CK_ECDH_ECDSA_WITH_CAMELLIA_128_CBC_SHA256  0x0300C074
+#define TLS1_CK_ECDH_ECDSA_WITH_CAMELLIA_256_CBC_SHA384  0x0300C075
+#define TLS1_CK_ECDHE_RSA_WITH_CAMELLIA_128_CBC_SHA256   0x0300C076
+#define TLS1_CK_ECDHE_RSA_WITH_CAMELLIA_256_CBC_SHA384   0x0300C077
+#define TLS1_CK_ECDH_RSA_WITH_CAMELLIA_128_CBC_SHA256    0x0300C078
+#define TLS1_CK_ECDH_RSA_WITH_CAMELLIA_256_CBC_SHA384    0x0300C079
+
 /* XXX
- * Inconsistency alert:
- * The OpenSSL names of ciphers with ephemeral DH here include the string
- * "DHE", while elsewhere it has always been "EDH".
- * (The alias for the list of all such ciphers also is "EDH".)
- * The specifications speak of "EDH"; maybe we should allow both forms
- * for everything. */
+ * Backward compatibility alert:
+ * Older versions of OpenSSL gave some DHE ciphers names with "EDH"
+ * instead of "DHE".  Going forward, we should be using DHE
+ * everywhere, though we may indefinitely maintain aliases for users
+ * or configurations that used "EDH"
+ */
 #define TLS1_TXT_RSA_EXPORT1024_WITH_RC4_56_MD5		"EXP1024-RC4-MD5"
 #define TLS1_TXT_RSA_EXPORT1024_WITH_RC2_CBC_56_MD5	"EXP1024-RC2-CBC-MD5"
 #define TLS1_TXT_RSA_EXPORT1024_WITH_DES_CBC_SHA	"EXP1024-DES-CBC-SHA"
@@ -652,6 +678,21 @@ SSL_CTX_ctrl(ctx, SSL_CTRL_SET_TLSEXT_AUTHZ_SERVER_AUDIT_PROOF_CB_ARG, 0, arg);
 #define TLS1_TXT_DHE_RSA_WITH_CAMELLIA_256_CBC_SHA	"DHE-RSA-CAMELLIA256-SHA"
 #define TLS1_TXT_ADH_WITH_CAMELLIA_256_CBC_SHA		"ADH-CAMELLIA256-SHA"
 
+/* TLS 1.2 Camellia SHA-256 ciphersuites from RFC5932 */
+#define TLS1_TXT_RSA_WITH_CAMELLIA_128_CBC_SHA256		"CAMELLIA128-SHA256"
+#define TLS1_TXT_DH_DSS_WITH_CAMELLIA_128_CBC_SHA256		"DH-DSS-CAMELLIA128-SHA256"
+#define TLS1_TXT_DH_RSA_WITH_CAMELLIA_128_CBC_SHA256		"DH-RSA-CAMELLIA128-SHA256"
+#define TLS1_TXT_DHE_DSS_WITH_CAMELLIA_128_CBC_SHA256		"DHE-DSS-CAMELLIA128-SHA256"
+#define TLS1_TXT_DHE_RSA_WITH_CAMELLIA_128_CBC_SHA256		"DHE-RSA-CAMELLIA128-SHA256"
+#define TLS1_TXT_ADH_WITH_CAMELLIA_128_CBC_SHA256		"ADH-CAMELLIA128-SHA256"
+
+#define TLS1_TXT_RSA_WITH_CAMELLIA_256_CBC_SHA256		"CAMELLIA256-SHA256"
+#define TLS1_TXT_DH_DSS_WITH_CAMELLIA_256_CBC_SHA256		"DH-DSS-CAMELLIA256-SHA256"
+#define TLS1_TXT_DH_RSA_WITH_CAMELLIA_256_CBC_SHA256		"DH-RSA-CAMELLIA256-SHA256"
+#define TLS1_TXT_DHE_DSS_WITH_CAMELLIA_256_CBC_SHA256		"DHE-DSS-CAMELLIA256-SHA256"
+#define TLS1_TXT_DHE_RSA_WITH_CAMELLIA_256_CBC_SHA256		"DHE-RSA-CAMELLIA256-SHA256"
+#define TLS1_TXT_ADH_WITH_CAMELLIA_256_CBC_SHA256		"ADH-CAMELLIA256-SHA256"
+
 /* SEED ciphersuites from RFC4162 */
 #define TLS1_TXT_RSA_WITH_SEED_SHA                      "SEED-SHA"
 #define TLS1_TXT_DH_DSS_WITH_SEED_SHA                   "DH-DSS-SEED-SHA"
@@ -709,6 +750,16 @@ SSL_CTX_ctrl(ctx, SSL_CTRL_SET_TLSEXT_AUTHZ_SERVER_AUDIT_PROOF_CB_ARG, 0, arg);
 #define TLS1_TXT_ECDHE_RSA_WITH_AES_256_GCM_SHA384      "ECDHE-RSA-AES256-GCM-SHA384"
 #define TLS1_TXT_ECDH_RSA_WITH_AES_128_GCM_SHA256       "ECDH-RSA-AES128-GCM-SHA256"
 #define TLS1_TXT_ECDH_RSA_WITH_AES_256_GCM_SHA384       "ECDH-RSA-AES256-GCM-SHA384"
+
+/* Camellia-CBC ciphersuites from RFC6367 */
+#define TLS1_TXT_ECDHE_ECDSA_WITH_CAMELLIA_128_CBC_SHA256 "ECDHE-ECDSA-CAMELLIA128-SHA256"
+#define TLS1_TXT_ECDHE_ECDSA_WITH_CAMELLIA_256_CBC_SHA384 "ECDHE-ECDSA-CAMELLIA256-SHA384"
+#define TLS1_TXT_ECDH_ECDSA_WITH_CAMELLIA_128_CBC_SHA256  "ECDH-ECDSA-CAMELLIA128-SHA256"
+#define TLS1_TXT_ECDH_ECDSA_WITH_CAMELLIA_256_CBC_SHA384  "ECDH-ECDSA-CAMELLIA256-SHA384"
+#define TLS1_TXT_ECDHE_RSA_WITH_CAMELLIA_128_CBC_SHA256   "ECDHE-RSA-CAMELLIA128-SHA256"
+#define TLS1_TXT_ECDHE_RSA_WITH_CAMELLIA_256_CBC_SHA384   "ECDHE-RSA-CAMELLIA256-SHA384"
+#define TLS1_TXT_ECDH_RSA_WITH_CAMELLIA_128_CBC_SHA256    "ECDH-RSA-CAMELLIA128-SHA256"
+#define TLS1_TXT_ECDH_RSA_WITH_CAMELLIA_256_CBC_SHA384    "ECDH-RSA-CAMELLIA256-SHA384"
 
 #define TLS_CT_RSA_SIGN			1
 #define TLS_CT_DSS_SIGN			2

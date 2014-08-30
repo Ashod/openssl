@@ -318,6 +318,15 @@ extern "C" {
 	     : "r"(a), "r"(b));
 #    endif
 #  endif
+# elif defined(__aarch64__) && defined(SIXTY_FOUR_BIT_LONG)
+#  if defined(__GNUC__) && __GNUC__>=2
+#   define BN_UMULT_HIGH(a,b)	({	\
+	register BN_ULONG ret;		\
+	asm ("umulh	%0,%1,%2"	\
+	     : "=r"(ret)		\
+	     : "r"(a), "r"(b));		\
+	ret;			})
+#  endif
 # endif		/* cpu */
 #endif		/* OPENSSL_NO_ASM */
 
@@ -524,6 +533,11 @@ int bn_mul_mont(BN_ULONG *rp, const BN_ULONG *ap, const BN_ULONG *bp, const BN_U
 
 BIGNUM *int_bn_mod_inverse(BIGNUM *in,
 	const BIGNUM *a, const BIGNUM *n, BN_CTX *ctx, int *noinv);
+
+int bn_probable_prime_dh(BIGNUM *rnd, int bits,
+	const BIGNUM *add, const BIGNUM *rem, BN_CTX *ctx);
+int bn_probable_prime_dh_retry(BIGNUM *rnd, int bits, BN_CTX *ctx);
+int bn_probable_prime_dh_coprime(BIGNUM *rnd, int bits, BN_CTX *ctx);
 
 #ifdef  __cplusplus
 }

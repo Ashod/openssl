@@ -210,15 +210,6 @@
 #undef SSL_set_not_resumable_session_callback
 #define SSL_set_not_resumable_session_callback	SSL_set_not_resumbl_sess_cb
 
-#undef tls1_send_server_supplemental_data
-#define tls1_send_server_supplemental_data	tls1_send_server_suppl_data
-#undef tls1_get_server_supplemental_data
-#define tls1_get_server_supplemental_data	tls1_get_server_suppl_data
-
-#undef SSL_SESSION_get_tlsext_authz_server_audit_proof
-#define SSL_SESSION_get_tlsext_authz_server_audit_proof	\
-						S_SES_get_tlsx_auz_srvr_aud_prf
-
 /* Hack some long ENGINE names */
 #undef ENGINE_get_default_BN_mod_exp_crt
 #define ENGINE_get_default_BN_mod_exp_crt	ENGINE_get_def_BN_mod_exp_crt

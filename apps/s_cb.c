@@ -120,6 +120,10 @@
 #include <openssl/rand.h>
 #include <openssl/x509.h>
 #include <openssl/ssl.h>
+#include <openssl/bn.h>
+#ifndef OPENSSL_NO_DH
+#include <openssl/dh.h>
+#endif
 #include "s_apps.h"
 
 #define	COOKIE_SECRET_LENGTH	16
@@ -259,6 +263,7 @@ int set_cert_stuff(SSL_CTX *ctx, char *cert_file, char *key_file)
 int set_cert_key_stuff(SSL_CTX *ctx, X509 *cert, EVP_PKEY *key,
 		       STACK_OF(X509) *chain, int build_chain)
 	{
+	int chflags = chain ? SSL_BUILD_CHAIN_FLAG_CHECK : 0;
 	if (cert == NULL)
 		return 1;
 	if (SSL_CTX_use_certificate(ctx,cert) <= 0)
@@ -288,7 +293,7 @@ int set_cert_key_stuff(SSL_CTX *ctx, X509 *cert, EVP_PKEY *key,
 		ERR_print_errors(bio_err);
 		return 0;
 		}
-	if (!chain && build_chain && !SSL_CTX_build_cert_chain(ctx, 0))
+	if (build_chain && !SSL_CTX_build_cert_chain(ctx, chflags))
 		{
 		BIO_printf(bio_err,"error building certificate chain\n");
 		ERR_print_errors(bio_err);
@@ -423,7 +428,7 @@ int ssl_print_sigalgs(BIO *out, SSL *s)
 		BIO_printf(out, "Peer signing digest: %s\n", OBJ_nid2sn(mdnid));
 	return 1;
 	}
-
+#ifndef OPENSSL_NO_EC
 int ssl_print_point_formats(BIO *out, SSL *s)
 	{
 	int i, nformats;
@@ -515,7 +520,7 @@ int ssl_print_curves(BIO *out, SSL *s, int noshared)
 	BIO_puts(out, "\n");
 	return 1;
 	}
-
+#endif
 int ssl_print_tmp_key(BIO *out, SSL *s)
 	{
 	EVP_PKEY *key;
@@ -531,7 +536,7 @@ int ssl_print_tmp_key(BIO *out, SSL *s)
 	case EVP_PKEY_DH:
 		BIO_printf(out, "DH, %d bits\n", EVP_PKEY_bits(key));
 		break;
-
+#ifndef OPENSSL_NO_ECDH
 	case EVP_PKEY_EC:
 			{
 			EC_KEY *ec = EVP_PKEY_get1_EC_KEY(key);
@@ -545,6 +550,7 @@ int ssl_print_tmp_key(BIO *out, SSL *s)
 			BIO_printf(out, "ECDH, %s, %d bits\n",
 						cname, EVP_PKEY_bits(key));
 			}
+#endif
 		}
 	EVP_PKEY_free(key);
 	return 1;
@@ -611,6 +617,28 @@ void MS_CALLBACK apps_ssl_info_callback(const SSL *s, int where, int ret)
 		}
 	}
 
+static const char *ssl_version_str(int version)
+	{
+	switch (version)
+		{
+	case SSL2_VERSION:
+		return "SSL 2.0";
+	case SSL3_VERSION:
+		return "SSL 3.0";
+	case TLS1_VERSION:
+		return "TLS 1.0";
+	case TLS1_1_VERSION:
+		return "TLS 1.1";
+	case TLS1_2_VERSION:
+		return "TLS 1.2";
+	case DTLS1_VERSION:
+		return "DTLS 1.0";
+	case DTLS1_BAD_VER:
+		return "DTLS 1.0 (bad)";
+	default:
+		return "???";
+		}
+	}
 
 void MS_CALLBACK msg_cb(int write_p, int version, int content_type, const void *buf, size_t len, SSL *ssl, void *arg)
 	{
@@ -619,32 +647,7 @@ void MS_CALLBACK msg_cb(int write_p, int version, int content_type, const void *
 	
 	str_write_p = write_p ? ">>>" : "<<<";
 
-	switch (version)
-		{
-	case SSL2_VERSION:
-		str_version = "SSL 2.0";
-		break;
-	case SSL3_VERSION:
-		str_version = "SSL 3.0 ";
-		break;
-	case TLS1_VERSION:
-		str_version = "TLS 1.0 ";
-		break;
-	case TLS1_1_VERSION:
-		str_version = "TLS 1.1 ";
-		break;
-	case TLS1_2_VERSION:
-		str_version = "TLS 1.2 ";
-		break;
-	case DTLS1_VERSION:
-		str_version = "DTLS 1.0 ";
-		break;
-	case DTLS1_BAD_VER:
-		str_version = "DTLS 1.0 (bad) ";
-		break;
-	default:
-		str_version = "???";
-		}
+	str_version = ssl_version_str(version);
 
 	if (version == SSL2_VERSION)
 		{
@@ -1019,6 +1022,14 @@ void MS_CALLBACK tlsext_cb(SSL *s, int client_server, int type,
 		extname = "next protocol";
 		break;
 #endif
+#ifdef TLSEXT_TYPE_encrypt_then_mac
+		case TLSEXT_TYPE_encrypt_then_mac:
+		extname = "encrypt-then-mac";
+		break;
+#endif
+		case TLSEXT_TYPE_padding:
+		extname = "TLS padding";
+		break;
 
 		default:
 		extname = "unknown";
@@ -1263,6 +1274,16 @@ static int set_cert_cb(SSL *ssl, void *arg)
 	{
 	int i, rv;
 	SSL_EXCERT *exc = arg;
+#ifdef CERT_CB_TEST_RETRY
+	static int retry_cnt;
+	if (retry_cnt < 5)
+		{
+		retry_cnt++;
+		fprintf(stderr, "Certificate callback retry test: count %d\n",
+								retry_cnt);
+		return -1;
+		}
+#endif
 	SSL_certs_clear(ssl);
 
 	if (!exc)
@@ -1565,11 +1586,16 @@ void print_ssl_summary(BIO *bio, SSL *s)
 		BIO_puts(bio, "No peer certificate\n");
 	if (peer)
 		X509_free(peer);
+#ifndef OPENSSL_NO_EC
 	ssl_print_point_formats(bio, s);
 	if (SSL_is_server(s))
 		ssl_print_curves(bio, s, 1);
 	else
 		ssl_print_tmp_key(bio, s);
+#else
+	if (!SSL_is_server(s))
+		ssl_print_tmp_key(bio, s);
+#endif
 	}
 
 int args_ssl(char ***pargs, int *pargc, SSL_CONF_CTX *cctx,
@@ -1671,6 +1697,12 @@ int args_ssl_call(SSL_CTX *ctx, BIO *err, SSL_CONF_CTX *cctx,
 			}
 		}
 #endif
+	if (!SSL_CONF_CTX_finish(cctx))
+		{
+		BIO_puts(err, "Error finishing context\n");
+		ERR_print_errors(err);
+		return 0;
+		}
 	return 1;
 	}
 
@@ -1728,3 +1760,200 @@ int ssl_load_stores(SSL_CTX *ctx,
 		X509_STORE_free(ch);
 	return rv;
 	}
+
+/* Verbose print out of security callback */
+
+typedef struct
+	{
+	BIO *out;
+	int verbose;
+	int (*old_cb)(SSL *s, SSL_CTX *ctx, int op, int bits, int nid,
+				void *other, void *ex);
+	} security_debug_ex;
+
+static int security_callback_debug(SSL *s, SSL_CTX *ctx,
+				int op, int bits, int nid,
+				void *other, void *ex)
+	{
+	security_debug_ex *sdb = ex;
+	int rv, show_bits = 1, cert_md = 0;
+	const char *nm;
+	rv = sdb->old_cb(s, ctx, op, bits, nid, other, ex);
+	if (rv == 1 && sdb->verbose < 2)
+		return 1;
+	BIO_puts(sdb->out, "Security callback: ");
+
+	switch (op)
+		{
+	case SSL_SECOP_CIPHER_SUPPORTED:
+		nm = "Supported Ciphersuite";
+		break;
+	case SSL_SECOP_CIPHER_SHARED:
+		nm = "Shared Ciphersuite";
+		break;
+	case SSL_SECOP_CIPHER_CHECK:
+		nm = "Check Ciphersuite";
+		break;
+	case SSL_SECOP_TICKET:
+		BIO_puts(sdb->out, "Session ticket");
+		show_bits = 0;
+		nm = NULL;
+		break;
+	case SSL_SECOP_COMPRESSION:
+		BIO_puts(sdb->out, "SSL compression");
+		show_bits = 0;
+		nm = NULL;
+		break;
+#ifndef OPENSSL_NO_DH
+	case SSL_SECOP_TMP_DH:
+		nm = "Temp DH key bits";
+		break;
+#endif
+	case SSL_SECOP_CURVE_SUPPORTED:
+		nm = "Supported Curve";
+		break;
+	case SSL_SECOP_CURVE_SHARED:
+		nm = "Shared Curve";
+		break;
+	case SSL_SECOP_CURVE_CHECK:
+		nm = "Check Curve";
+		break;
+	case SSL_SECOP_SSL2_COMPAT:
+		BIO_puts(sdb->out, "SSLv2 compatible");
+		show_bits = 0;
+		nm = NULL;
+		break;
+	case SSL_SECOP_VERSION:
+		BIO_printf(sdb->out, "Version=%s", ssl_version_str(nid));
+		show_bits = 0;
+		nm = NULL;
+		break;
+	case SSL_SECOP_SIGALG_SUPPORTED:
+		nm = "Supported Signature Algorithm digest";
+		break;
+	case SSL_SECOP_SIGALG_SHARED:
+		nm = "Shared Signature Algorithm digest";
+		break;
+	case SSL_SECOP_SIGALG_CHECK:
+		nm = "Check Signature Algorithm digest";
+		break;
+	case SSL_SECOP_SIGALG_MASK:
+		nm = "Signature Algorithm mask";
+		break;
+	case SSL_SECOP_EE_KEY:
+		nm = "Certificate chain EE key";
+		break;
+	case SSL_SECOP_CA_KEY:
+		nm = "Certificate chain CA key";
+		break;
+	case SSL_SECOP_CA_MD:
+		cert_md = 1;
+		nm = "Certificate chain CA digest";
+		break;
+	case SSL_SECOP_PEER_EE_KEY:
+		nm = "Peer Chain EE key";
+		break;
+	case SSL_SECOP_PEER_CA_KEY:
+		nm = "Peer Chain CA key";
+		break;
+	case SSL_SECOP_PEER_CA_MD:
+		cert_md = 1;
+		nm = "Peer chain CA digest";
+		break;
+	default:
+		nm = NULL;
+		}
+	if (nm)
+		BIO_printf(sdb->out, "%s=", nm);
+
+	switch (op & SSL_SECOP_OTHER_TYPE)
+		{
+
+	case SSL_SECOP_OTHER_CIPHER:
+		BIO_puts(sdb->out, SSL_CIPHER_get_name(other));
+		break;
+
+	case SSL_SECOP_OTHER_CURVE:
+			{
+			const char *cname;
+			cname = EC_curve_nid2nist(nid);
+			if (cname == NULL)
+				cname = OBJ_nid2sn(nid);
+			BIO_puts(sdb->out, cname);
+			}
+			break;
+
+	case SSL_SECOP_OTHER_DH:
+			{
+			DH *dh = other;
+			BIO_printf(sdb->out, "%d", BN_num_bits(dh->p));
+			break;
+			}
+	case SSL_SECOP_OTHER_CERT:
+			{
+			if (cert_md)
+				{
+				int sig_nid = X509_get_signature_nid(other);
+				BIO_puts(sdb->out, OBJ_nid2sn(sig_nid));
+				}
+			else
+				{
+				EVP_PKEY *pkey = X509_get_pubkey(other);
+				const char *algname = "";
+				EVP_PKEY_asn1_get0_info(NULL, NULL, NULL, NULL,
+						&algname,
+						EVP_PKEY_get0_asn1(pkey));
+				BIO_printf(sdb->out, "%s, bits=%d",
+						algname, EVP_PKEY_bits(pkey));
+				EVP_PKEY_free(pkey);
+				}
+			break;
+			}
+	case SSL_SECOP_OTHER_SIGALG:
+			{
+			const unsigned char *salg = other;
+			const char *sname = NULL;
+			switch (salg[1])
+				{
+			case TLSEXT_signature_anonymous:
+				sname = "anonymous";
+				break;
+			case TLSEXT_signature_rsa:
+				sname = "RSA";
+				break;
+			case TLSEXT_signature_dsa:
+				sname = "DSA";
+				break;
+			case TLSEXT_signature_ecdsa:
+				sname = "ECDSA";
+				break;
+				}
+				
+			BIO_puts(sdb->out, OBJ_nid2sn(nid));
+			if (sname)
+				BIO_printf(sdb->out, ", algorithm=%s", sname);
+			else
+				BIO_printf(sdb->out, ", algid=%d", salg[1]);
+			break;
+			}
+	
+		}
+
+	if (show_bits)
+		BIO_printf(sdb->out, ", security bits=%d", bits);
+	BIO_printf(sdb->out, ": %s\n", rv ? "yes" : "no");
+	return rv;
+	}
+
+void ssl_ctx_security_debug(SSL_CTX *ctx, BIO *out, int verbose)
+	{
+	static security_debug_ex sdb;
+	sdb.out = out;
+	sdb.verbose = verbose;
+	sdb.old_cb = SSL_CTX_get_security_callback(ctx);
+	SSL_CTX_set_security_callback(ctx, security_callback_debug);
+	SSL_CTX_set0_security_ex_data(ctx, &sdb);
+	}
+
+
+

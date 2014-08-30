@@ -140,7 +140,7 @@
 #include <openssl/evp.h>
 #include <openssl/md5.h>
 
-static unsigned char ssl3_pad_1[48]={
+static const unsigned char ssl3_pad_1[48]={
 	0x36,0x36,0x36,0x36,0x36,0x36,0x36,0x36,
 	0x36,0x36,0x36,0x36,0x36,0x36,0x36,0x36,
 	0x36,0x36,0x36,0x36,0x36,0x36,0x36,0x36,
@@ -148,7 +148,7 @@ static unsigned char ssl3_pad_1[48]={
 	0x36,0x36,0x36,0x36,0x36,0x36,0x36,0x36,
 	0x36,0x36,0x36,0x36,0x36,0x36,0x36,0x36 };
 
-static unsigned char ssl3_pad_2[48]={
+static const unsigned char ssl3_pad_2[48]={
 	0x5c,0x5c,0x5c,0x5c,0x5c,0x5c,0x5c,0x5c,
 	0x5c,0x5c,0x5c,0x5c,0x5c,0x5c,0x5c,0x5c,
 	0x5c,0x5c,0x5c,0x5c,0x5c,0x5c,0x5c,0x5c,
@@ -418,7 +418,7 @@ int ssl3_setup_key_block(SSL *s)
 	if (s->s3->tmp.key_block_length != 0)
 		return(1);
 
-	if (!ssl_cipher_get_evp(s->session,&c,&hash,NULL,NULL,&comp))
+	if (!ssl_cipher_get_evp(s->session,&c,&hash,NULL,NULL,&comp, 0))
 		{
 		SSLerr(SSL_F_SSL3_SETUP_KEY_BLOCK,SSL_R_CIPHER_OR_HASH_UNAVAILABLE);
 		return(0);
@@ -494,7 +494,7 @@ void ssl3_cleanup_key_block(SSL *s)
  *       short etc).
  *   1: if the record's padding is valid / the encryption was successful.
  *   -1: if the record's padding is invalid or, if sending, an internal error
- *       occured.
+ *       occurred.
  */
 int ssl3_enc(SSL *s, int send)
 	{
@@ -663,10 +663,18 @@ int ssl3_cert_verify_mac(SSL *s, int md_nid, unsigned char *p)
 int ssl3_final_finish_mac(SSL *s, 
 	     const char *sender, int len, unsigned char *p)
 	{
-	int ret;
+	int ret, sha1len;
 	ret=ssl3_handshake_mac(s,NID_md5,sender,len,p);
+	if(ret == 0)
+		return 0;
+
 	p+=ret;
-	ret+=ssl3_handshake_mac(s,NID_sha1,sender,len,p);
+
+	sha1len=ssl3_handshake_mac(s,NID_sha1,sender,len,p);
+	if(sha1len == 0)
+		return 0;
+
+	ret+=sha1len;
 	return(ret);
 	}
 static int ssl3_handshake_mac(SSL *s, int md_nid,

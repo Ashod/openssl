@@ -218,7 +218,7 @@ static int add_cert_dir(BY_DIR *ctx, const char *dir, int type)
 
 	s=dir;
 	p=s;
-	for (;;p++)
+	do
 		{
 		if ((*p == LIST_SEPARATOR_CHAR) || (*p == '\0'))
 			{
@@ -264,9 +264,7 @@ static int add_cert_dir(BY_DIR *ctx, const char *dir, int type)
 				return 0;
 				}
 			}
-		if (*p == '\0')
-			break;
-		}
+		} while (*p++ != '\0');
 	return 1;
 	}
 
@@ -446,6 +444,13 @@ static int get_cert_by_subject(X509_LOOKUP *xl, int type, X509_NAME *name,
 			if (!hent)
 				{
 				hent = OPENSSL_malloc(sizeof(BY_DIR_HASH));
+				if (hent == NULL)
+					{
+					CRYPTO_w_unlock(CRYPTO_LOCK_X509_STORE);
+					X509err(X509_F_GET_CERT_BY_SUBJECT,ERR_R_MALLOC_FAILURE);
+					ok = 0;
+					goto finish;
+					}
 				hent->hash = h;
 				hent->suffix = k;
 				if (!sk_BY_DIR_HASH_push(ent->hashes, hent))

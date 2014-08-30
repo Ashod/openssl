@@ -623,7 +623,7 @@ static int client_master_key(SSL *s)
 	if (s->state == SSL2_ST_SEND_CLIENT_MASTER_KEY_A)
 		{
 
-		if (!ssl_cipher_get_evp(s->session,&c,&md,NULL,NULL,NULL))
+		if (!ssl_cipher_get_evp(s->session,&c,&md,NULL,NULL,NULL, 0))
 			{
 			ssl2_return_error(s,SSL2_PE_NO_CIPHER);
 			SSLerr(SSL_F_CLIENT_MASTER_KEY,SSL_R_PROBLEMS_MAPPING_CIPHER_FUNCTIONS);
@@ -1055,6 +1055,12 @@ int ssl2_set_certificate(SSL *s, int type, int len, const unsigned char *data)
 		}
 	ERR_clear_error(); /* but we keep s->verify_result */
 	s->session->verify_result = s->verify_result;
+
+	if (i > 1)
+		{
+		SSLerr(SSL_F_SSL2_SET_CERTIFICATE, i);
+		goto err;
+		}
 
 	/* server's cert for this session */
 	sc=ssl_sess_cert_new();

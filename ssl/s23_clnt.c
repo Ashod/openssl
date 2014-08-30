@@ -259,14 +259,39 @@ static int ssl23_no_ssl2_ciphers(SSL *s)
 	SSL_CIPHER *cipher;
 	STACK_OF(SSL_CIPHER) *ciphers;
 	int i;
+	ssl_set_client_disabled(s);
 	ciphers = SSL_get_ciphers(s);
 	for (i = 0; i < sk_SSL_CIPHER_num(ciphers); i++)
 		{
 		cipher = sk_SSL_CIPHER_value(ciphers, i);
+		if (ssl_cipher_disabled(s, cipher, SSL_SECOP_CIPHER_SUPPORTED))
+			continue;
 		if (cipher->algorithm_ssl == SSL_SSLV2)
 			return 0;
 		}
 	return 1;
+	}
+
+/* Fill a ClientRandom or ServerRandom field of length len. Returns <= 0
+ * on failure, 1 on success. */
+int ssl_fill_hello_random(SSL *s, int server, unsigned char *result, int len)
+	{
+		int send_time = 0;
+		if (len < 4)
+			return 0;
+		if (server)
+			send_time = (s->mode & SSL_MODE_SEND_SERVERHELLO_TIME) != 0;
+		else
+			send_time = (s->mode & SSL_MODE_SEND_CLIENTHELLO_TIME) != 0;
+		if (send_time)
+			{
+			unsigned long Time = (unsigned long)time(NULL);
+			unsigned char *p = result;
+			l2n(Time, p);
+			return RAND_pseudo_bytes(p, len-4);
+			}
+		else
+			return RAND_pseudo_bytes(result, len);
 	}
 
 static int ssl23_client_hello(SSL *s)
@@ -274,9 +299,10 @@ static int ssl23_client_hello(SSL *s)
 	unsigned char *buf;
 	unsigned char *p,*d;
 	int i,ch_len;
-	unsigned long Time,l;
+	unsigned long l;
 	int ssl2_compat;
 	int version = 0, version_major, version_minor;
+	int al = 0;
 #ifndef OPENSSL_NO_COMP
 	int j;
 	SSL_COMP *comp;
@@ -286,6 +312,8 @@ static int ssl23_client_hello(SSL *s)
 
 	ssl2_compat = (options & SSL_OP_NO_SSLv2) ? 0 : 1;
 
+	if (ssl2_compat && !ssl_security(s, SSL_SECOP_SSL2_COMPAT, 0, 0, NULL))
+		ssl2_compat = 0;
 	if (ssl2_compat && ssl23_no_ssl2_ciphers(s))
 		ssl2_compat = 0;
 
@@ -340,7 +368,7 @@ static int ssl23_client_hello(SSL *s)
 		if (s->ctx->tlsext_opaque_prf_input_callback != 0 || s->tlsext_opaque_prf_input != NULL)
 			ssl2_compat = 0;
 #endif
-                if (s->ctx->tlsext_authz_server_audit_proof_cb != NULL)
+		if (s->cert->cli_ext.meths_count != 0)
 			ssl2_compat = 0;
 		}
 #endif
@@ -357,9 +385,7 @@ static int ssl23_client_hello(SSL *s)
 #endif
 
 		p=s->s3->client_random;
-		Time=(unsigned long)time(NULL);		/* Time */
-		l2n(Time,p);
-		if (RAND_pseudo_bytes(p,SSL3_RANDOM_SIZE-4) <= 0)
+		if (ssl_fill_hello_random(s, 0, p, SSL3_RANDOM_SIZE) <= 0)
 			return -1;
 
 		if (version == TLS1_2_VERSION)
@@ -510,8 +536,7 @@ static int ssl23_client_hello(SSL *s)
 #ifdef OPENSSL_NO_COMP
 			*(p++)=1;
 #else
-			if ((s->options & SSL_OP_NO_COMPRESSION)
-						|| !s->ctx->comp_methods)
+			if (!ssl_allow_compression(s) || !s->ctx->comp_methods)
 				j=0;
 			else
 				j=sk_SSL_COMP_num(s->ctx->comp_methods);
@@ -531,8 +556,9 @@ static int ssl23_client_hello(SSL *s)
 				SSLerr(SSL_F_SSL23_CLIENT_HELLO,SSL_R_CLIENTHELLO_TLSEXT);
 				return -1;
 				}
-			if ((p = ssl_add_clienthello_tlsext(s, p, buf+SSL3_RT_MAX_PLAIN_LENGTH)) == NULL)
+			if ((p = ssl_add_clienthello_tlsext(s, p, buf+SSL3_RT_MAX_PLAIN_LENGTH, &al)) == NULL)
 				{
+				ssl3_send_alert(s,SSL3_AL_FATAL,al);
 				SSLerr(SSL_F_SSL23_CLIENT_HELLO,ERR_R_INTERNAL_ERROR);
 				return -1;
 				}
@@ -723,6 +749,12 @@ static int ssl23_get_server_hello(SSL *s)
 		else
 			{
 			SSLerr(SSL_F_SSL23_GET_SERVER_HELLO,SSL_R_UNSUPPORTED_PROTOCOL);
+			goto err;
+			}
+
+		if (!ssl_security(s, SSL_SECOP_VERSION, 0, s->version, NULL))
+			{
+			SSLerr(SSL_F_SSL23_GET_SERVER_HELLO,SSL_R_VERSION_TOO_LOW);
 			goto err;
 			}
 

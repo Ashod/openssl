@@ -149,12 +149,18 @@ extern "C" {
 #define SSL3_CK_DH_RSA_DES_64_CBC_SHA		0x0300000F
 #define SSL3_CK_DH_RSA_DES_192_CBC3_SHA 	0x03000010
 
-#define SSL3_CK_EDH_DSS_DES_40_CBC_SHA		0x03000011
-#define SSL3_CK_EDH_DSS_DES_64_CBC_SHA		0x03000012
-#define SSL3_CK_EDH_DSS_DES_192_CBC3_SHA	0x03000013
-#define SSL3_CK_EDH_RSA_DES_40_CBC_SHA		0x03000014
-#define SSL3_CK_EDH_RSA_DES_64_CBC_SHA		0x03000015
-#define SSL3_CK_EDH_RSA_DES_192_CBC3_SHA	0x03000016
+#define SSL3_CK_DHE_DSS_DES_40_CBC_SHA		0x03000011
+#define SSL3_CK_EDH_DSS_DES_40_CBC_SHA          SSL3_CK_DHE_DSS_DES_40_CBC_SHA
+#define SSL3_CK_DHE_DSS_DES_64_CBC_SHA		0x03000012
+#define SSL3_CK_EDH_DSS_DES_64_CBC_SHA		SSL3_CK_DHE_DSS_DES_64_CBC_SHA
+#define SSL3_CK_DHE_DSS_DES_192_CBC3_SHA	0x03000013
+#define SSL3_CK_EDH_DSS_DES_192_CBC3_SHA	SSL3_CK_DHE_DSS_DES_192_CBC3_SHA
+#define SSL3_CK_DHE_RSA_DES_40_CBC_SHA		0x03000014
+#define SSL3_CK_EDH_RSA_DES_40_CBC_SHA		SSL3_CK_DHE_RSA_DES_40_CBC_SHA
+#define SSL3_CK_DHE_RSA_DES_64_CBC_SHA		0x03000015
+#define SSL3_CK_EDH_RSA_DES_64_CBC_SHA		SSL3_CK_DHE_RSA_DES_64_CBC_SHA
+#define SSL3_CK_DHE_RSA_DES_192_CBC3_SHA	0x03000016
+#define SSL3_CK_EDH_RSA_DES_192_CBC3_SHA	SSL3_CK_DHE_RSA_DES_192_CBC3_SHA
 
 #define SSL3_CK_ADH_RC4_40_MD5			0x03000017
 #define SSL3_CK_ADH_RC4_128_MD5			0x03000018
@@ -208,6 +214,17 @@ extern "C" {
 #define SSL3_TXT_DH_RSA_DES_64_CBC_SHA		"DH-RSA-DES-CBC-SHA"
 #define SSL3_TXT_DH_RSA_DES_192_CBC3_SHA 	"DH-RSA-DES-CBC3-SHA"
 
+#define SSL3_TXT_DHE_DSS_DES_40_CBC_SHA		"EXP-DHE-DSS-DES-CBC-SHA"
+#define SSL3_TXT_DHE_DSS_DES_64_CBC_SHA		"DHE-DSS-DES-CBC-SHA"
+#define SSL3_TXT_DHE_DSS_DES_192_CBC3_SHA	"DHE-DSS-DES-CBC3-SHA"
+#define SSL3_TXT_DHE_RSA_DES_40_CBC_SHA		"EXP-DHE-RSA-DES-CBC-SHA"
+#define SSL3_TXT_DHE_RSA_DES_64_CBC_SHA		"DHE-RSA-DES-CBC-SHA"
+#define SSL3_TXT_DHE_RSA_DES_192_CBC3_SHA	"DHE-RSA-DES-CBC3-SHA"
+
+/* This next block of six "EDH" labels is for backward compatibility
+   with older versions of OpenSSL.  New code should use the six "DHE"
+   labels above instead:
+ */
 #define SSL3_TXT_EDH_DSS_DES_40_CBC_SHA		"EXP-EDH-DSS-DES-CBC-SHA"
 #define SSL3_TXT_EDH_DSS_DES_64_CBC_SHA		"EDH-DSS-DES-CBC-SHA"
 #define SSL3_TXT_EDH_DSS_DES_192_CBC3_SHA	"EDH-DSS-DES-CBC3-SHA"
@@ -411,6 +428,7 @@ typedef struct ssl3_buffer_st
 #define TLS1_FLAGS_TLS_PADDING_BUG		0x0008
 #define TLS1_FLAGS_SKIP_CERT_VERIFY		0x0010
 #define TLS1_FLAGS_KEEP_HANDSHAKE		0x0020
+#define SSL3_FLAGS_CCS_OK			0x0080
  
 /* SSL3_FLAGS_SGC_RESTART_DONE is set when we
  * restart a handshake because of MS SGC and so prevents us
@@ -422,6 +440,8 @@ typedef struct ssl3_buffer_st
  * effected, but we can't prevent that.
  */
 #define SSL3_FLAGS_SGC_RESTART_DONE		0x0040
+/* Set if we encrypt then mac instead of usual mac then encrypt */
+#define TLS1_FLAGS_ENCRYPT_THEN_MAC		0x0100
 
 #ifndef OPENSSL_NO_SSL_INTERN
 
@@ -564,20 +584,25 @@ typedef struct ssl3_state_st
 #endif
 
 #ifndef OPENSSL_NO_TLSEXT
-	/* tlsext_authz_client_types contains an array of supported authz
-	 * types, as advertised by the client. The array is sorted and
-	 * does not contain any duplicates. */
-	unsigned char *tlsext_authz_client_types;
-	size_t tlsext_authz_client_types_len;
-	/* tlsext_authz_promised_to_client is true iff we're a server and we
-	 * echoed the client's supplemental data extension and therefore must
-	 * send a supplemental data handshake message. */
-	char tlsext_authz_promised_to_client;
-	/* tlsext_authz_server_promised is true iff we're a client and the
-	 * server echoed our server_authz extension and therefore must send us
-	 * a supplemental data handshake message. */
-	char tlsext_authz_server_promised;
-#endif
+
+	/* ALPN information
+	 * (we are in the process of transitioning from NPN to ALPN.) */
+
+	/* In a server these point to the selected ALPN protocol after the
+	 * ClientHello has been processed. In a client these contain the
+	 * protocol that the server selected once the ServerHello has been
+	 * processed. */
+	unsigned char *alpn_selected;
+	unsigned alpn_selected_len;
+
+#ifndef OPENSSL_NO_EC
+	/* This is set to true if we believe that this is a version of Safari
+	 * running on OS X 10.6 or newer. We wish to know this because Safari
+	 * on 10.8 .. 10.8.3 has broken ECDHE-ECDSA support. */
+	char is_probably_safari;
+#endif /* !OPENSSL_NO_EC */
+
+#endif /* !OPENSSL_NO_TLSEXT */
 	} SSL3_STATE;
 
 #endif
@@ -606,8 +631,6 @@ typedef struct ssl3_state_st
 #define SSL3_ST_CR_CERT_REQ_B		(0x151|SSL_ST_CONNECT)
 #define SSL3_ST_CR_SRVR_DONE_A		(0x160|SSL_ST_CONNECT)
 #define SSL3_ST_CR_SRVR_DONE_B		(0x161|SSL_ST_CONNECT)
-#define SSL3_ST_CR_SUPPLEMENTAL_DATA_A	(0x210|SSL_ST_CONNECT)
-#define SSL3_ST_CR_SUPPLEMENTAL_DATA_B  (0x211|SSL_ST_CONNECT)
 /* write to server */
 #define SSL3_ST_CW_CERT_A		(0x170|SSL_ST_CONNECT)
 #define SSL3_ST_CW_CERT_B		(0x171|SSL_ST_CONNECT)
@@ -647,6 +670,7 @@ typedef struct ssl3_state_st
 #define SSL3_ST_SR_CLNT_HELLO_A		(0x110|SSL_ST_ACCEPT)
 #define SSL3_ST_SR_CLNT_HELLO_B		(0x111|SSL_ST_ACCEPT)
 #define SSL3_ST_SR_CLNT_HELLO_C		(0x112|SSL_ST_ACCEPT)
+#define SSL3_ST_SR_CLNT_HELLO_D		(0x115|SSL_ST_ACCEPT)
 /* write to client */
 #define DTLS1_ST_SW_HELLO_VERIFY_REQUEST_A (0x113|SSL_ST_ACCEPT)
 #define DTLS1_ST_SW_HELLO_VERIFY_REQUEST_B (0x114|SSL_ST_ACCEPT)
@@ -687,8 +711,6 @@ typedef struct ssl3_state_st
 #define SSL3_ST_SW_SESSION_TICKET_B	(0x1F1|SSL_ST_ACCEPT)
 #define SSL3_ST_SW_CERT_STATUS_A	(0x200|SSL_ST_ACCEPT)
 #define SSL3_ST_SW_CERT_STATUS_B	(0x201|SSL_ST_ACCEPT)
-#define SSL3_ST_SW_SUPPLEMENTAL_DATA_A	(0x220|SSL_ST_ACCEPT)
-#define SSL3_ST_SW_SUPPLEMENTAL_DATA_B	(0x221|SSL_ST_ACCEPT)
 
 #define SSL3_MT_HELLO_REQUEST			0
 #define SSL3_MT_CLIENT_HELLO			1
@@ -702,7 +724,6 @@ typedef struct ssl3_state_st
 #define SSL3_MT_CLIENT_KEY_EXCHANGE		16
 #define SSL3_MT_FINISHED			20
 #define SSL3_MT_CERTIFICATE_STATUS		22
-#define SSL3_MT_SUPPLEMENTAL_DATA		23
 #ifndef OPENSSL_NO_NEXTPROTONEG
 #define SSL3_MT_NEXT_PROTO			67
 #endif

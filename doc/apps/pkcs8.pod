@@ -14,12 +14,14 @@ B<openssl> B<pkcs8>
 [B<-passin arg>]
 [B<-out filename>]
 [B<-passout arg>]
+[B<-iter count>]
 [B<-noiter>]
 [B<-nocrypt>]
 [B<-nooct>]
 [B<-embed>]
 [B<-nsdb>]
 [B<-v2 alg>]
+[B<-v2prf alg>]
 [B<-v1 alg>]
 [B<-engine id>]
 
@@ -75,6 +77,12 @@ filename.
 the output file password source. For more information about the format of B<arg>
 see the B<PASS PHRASE ARGUMENTS> section in L<openssl(1)|openssl(1)>.
 
+=item B<-iter count>
+
+When creating new PKCS#8 containers, use a given number of iterations on the password
+in deriving the encryption key for the PKCS#8 output. High values increase the time
+required to brute-force a PKCS#8 container.
+
 =item B<-nocrypt>
 
 PKCS#8 keys generated or input are normally PKCS#8 EncryptedPrivateKeyInfo
@@ -117,6 +125,12 @@ private keys with OpenSSL then this doesn't matter.
 
 The B<alg> argument is the encryption algorithm to use, valid values include
 B<des>, B<des3> and B<rc2>. It is recommended that B<des3> is used.
+
+=item B<-v2prf alg>
+
+This option sets the PRF algorithm to use with PKCS#5 v2.0. A typical value
+values would be B<hmacWithSHA256>. If this option isn't set then the default
+for the cipher is used or B<hmacWithSHA1> if there is no default.
 
 =item B<-v1 alg>
 
@@ -195,6 +209,11 @@ DES:
 
  openssl pkcs8 -in key.pem -topk8 -v2 des3 -out enckey.pem
 
+Convert a private from traditional to PKCS#5 v2.0 format using AES with
+256 bits in CBC mode and B<hmacWithSHA256> PRF:
+
+ openssl pkcs8 -in key.pem -topk8 -v2 aes-256-cbc -v2prf hmacWithSHA256 -out enckey.pem
+
 Convert a private key to PKCS#8 using a PKCS#5 1.5 compatible algorithm
 (DES):
 
@@ -212,6 +231,11 @@ Read a DER unencrypted PKCS#8 format private key:
 Convert a private key from any PKCS#8 format to traditional format:
 
  openssl pkcs8 -in pk8.pem -out key.pem
+ 
+Convert a private key to PKCS#8 format, encrypting with AES-256 and with 
+one million iterations of the password:
+
+ openssl pkcs8 -in raw.pem -topk8 -v2 aes-256-cbc -iter 1000000 -out pk8.pem
 
 =head1 STANDARDS
 

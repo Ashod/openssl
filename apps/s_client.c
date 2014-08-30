@@ -203,7 +203,6 @@ static int c_debug=0;
 #ifndef OPENSSL_NO_TLSEXT
 static int c_tlsextdebug=0;
 static int c_status_req=0;
-static int c_proof_debug=0;
 #endif
 static int c_msg=0;
 static int c_showcerts=0;
@@ -215,7 +214,6 @@ static void sc_usage(void);
 static void print_stuff(BIO *berr,SSL *con,int full);
 #ifndef OPENSSL_NO_TLSEXT
 static int ocsp_resp_cb(SSL *s, void *arg);
-static int audit_proof_cb(SSL *s, void *arg);
 #endif
 static BIO *bio_c_out=NULL;
 static BIO *bio_c_msg=NULL;
@@ -292,8 +290,10 @@ static void sc_usage(void)
 	BIO_printf(bio_err,"\n");
 	BIO_printf(bio_err," -host host     - use -connect instead\n");
 	BIO_printf(bio_err," -port port     - use -connect instead\n");
-	BIO_printf(bio_err," -connect host:port - who to connect to (default is %s:%s)\n",SSL_HOST_NAME,PORT_STR);
+	BIO_printf(bio_err," -connect host:port - connect over TCP/IP (default is %s:%s)\n",SSL_HOST_NAME,PORT_STR);
+	BIO_printf(bio_err," -unix path    - connect over unix domain sockets\n");
 	BIO_printf(bio_err," -verify arg   - turn on peer certificate verification\n");
+	BIO_printf(bio_err," -verify_return_error - return verification errors\n");
 	BIO_printf(bio_err," -cert arg     - certificate file to use, PEM format assumed\n");
 	BIO_printf(bio_err," -certform arg - certificate format (PEM or DER) PEM default\n");
 	BIO_printf(bio_err," -key arg      - Private key file to use, in cert file if\n");
@@ -302,8 +302,10 @@ static void sc_usage(void)
 	BIO_printf(bio_err," -pass arg     - private key file pass phrase source\n");
 	BIO_printf(bio_err," -CApath arg   - PEM format directory of CA's\n");
 	BIO_printf(bio_err," -CAfile arg   - PEM format file of CA's\n");
+	BIO_printf(bio_err," -trusted_first - Use local CA's first when building trust chain\n");
 	BIO_printf(bio_err," -reconnect    - Drop and re-make the connection with the same Session-ID\n");
 	BIO_printf(bio_err," -pause        - sleep(1) after each read(2) and write(2) system call\n");
+	BIO_printf(bio_err," -prexit       - print session information even on connection failure\n");
 	BIO_printf(bio_err," -showcerts    - show all certificates in the chain\n");
 	BIO_printf(bio_err," -debug        - extra output\n");
 #ifdef WATT32
@@ -350,6 +352,7 @@ static void sc_usage(void)
 	BIO_printf(bio_err,"                 'prot' defines which one to assume.  Currently,\n");
 	BIO_printf(bio_err,"                 only \"smtp\", \"pop3\", \"imap\", \"ftp\" and \"xmpp\"\n");
 	BIO_printf(bio_err,"                 are supported.\n");
+	BIO_printf(bio_err," -xmpphost host - When used with \"-starttls xmpp\" specifies the virtual host.\n");
 #ifndef OPENSSL_NO_ENGINE
 	BIO_printf(bio_err," -engine id    - Initialise and use the specified engine\n");
 #endif
@@ -361,10 +364,11 @@ static void sc_usage(void)
 	BIO_printf(bio_err," -tlsextdebug      - hex dump of all TLS extensions received\n");
 	BIO_printf(bio_err," -status           - request certificate status from server\n");
 	BIO_printf(bio_err," -no_ticket        - disable use of RFC4507bis session tickets\n");
-	BIO_printf(bio_err," -proof_debug      - request an audit proof and print its hex dump\n");
+	BIO_printf(bio_err," -serverinfo types - send empty ClientHello extensions (comma-separated numbers)\n");
 # ifndef OPENSSL_NO_NEXTPROTONEG
 	BIO_printf(bio_err," -nextprotoneg arg - enable NPN extension, considering named protocols supported (comma-separated list)\n");
 # endif
+	BIO_printf(bio_err," -alpn arg         - enable ALPN extension, considering named protocols supported (comma-separated list)\n");
 #endif
 	BIO_printf(bio_err," -legacy_renegotiation - enable use of legacy renegotiation (dangerous)\n");
 	BIO_printf(bio_err," -use_srtp profiles - Offer SRTP key management with a colon-separated profile list\n");
@@ -542,6 +546,27 @@ static int next_proto_cb(SSL *s, unsigned char **out, unsigned char *outlen, con
 	return SSL_TLSEXT_ERR_OK;
 	}
 # endif  /* ndef OPENSSL_NO_NEXTPROTONEG */
+
+static int serverinfo_cli_parse_cb(SSL* s, unsigned int ext_type,
+				   const unsigned char* in, size_t inlen, 
+				   int* al, void* arg)
+	{
+	char pem_name[100];
+	unsigned char ext_buf[4 + 65536];
+
+	/* Reconstruct the type/len fields prior to extension data */
+	ext_buf[0] = ext_type >> 8;
+	ext_buf[1] = ext_type & 0xFF;
+	ext_buf[2] = inlen >> 8;
+	ext_buf[3] = inlen & 0xFF;
+	memcpy(ext_buf+4, in, inlen);
+
+	BIO_snprintf(pem_name, sizeof(pem_name), "SERVERINFO FOR EXTENSION %d",
+		     ext_type);
+	PEM_write_bio(bio_c_out, pem_name, "", ext_buf, 4 + inlen);
+	return 1;
+	}
+
 #endif
 
 enum
@@ -571,6 +596,8 @@ int MAIN(int argc, char **argv)
 	short port=PORT;
 	int full_log=1;
 	char *host=SSL_HOST_NAME;
+	const char *unix_path = NULL;
+	char *xmpphost = NULL;
 	char *cert_file=NULL,*key_file=NULL,*chain_file=NULL;
 	int cert_format = FORMAT_PEM, key_format = FORMAT_PEM;
 	char *passarg = NULL, *pass = NULL;
@@ -614,6 +641,10 @@ int MAIN(int argc, char **argv)
 # ifndef OPENSSL_NO_NEXTPROTONEG
 	const char *next_proto_neg_in = NULL;
 # endif
+	const char *alpn_in = NULL;
+# define MAX_SI_TYPES 100
+	unsigned short serverinfo_types[MAX_SI_TYPES];
+	int serverinfo_types_count = 0;
 #endif
 	char *sess_in = NULL;
 	char *sess_out = NULL;
@@ -641,6 +672,7 @@ static char *jpake_secret = NULL;
 	int crl_format = FORMAT_PEM;
 	int crl_download = 0;
 	STACK_OF(X509_CRL) *crls = NULL;
+	int sdebug = 0;
 
 	meth=SSLv23_client_method();
 
@@ -697,6 +729,16 @@ static char *jpake_secret = NULL;
 			if (--argc < 1) goto bad;
 			if (!extract_host_port(*(++argv),&host,NULL,&port))
 				goto bad;
+			}
+		else if (strcmp(*argv,"-unix") == 0)
+			{
+			if (--argc < 1) goto bad;
+			unix_path = *(++argv);
+			}
+		else if	(strcmp(*argv,"-xmpphost") == 0)
+			{
+			if (--argc < 1) goto bad;
+			xmpphost= *(++argv);
 			}
 		else if	(strcmp(*argv,"-verify") == 0)
 			{
@@ -788,8 +830,6 @@ static char *jpake_secret = NULL;
 			c_tlsextdebug=1;
 		else if	(strcmp(*argv,"-status") == 0)
 			c_status_req=1;
-		else if	(strcmp(*argv,"-proof_debug") == 0)
-			c_proof_debug=1;
 #endif
 #ifdef WATT32
 		else if (strcmp(*argv,"-wdebug") == 0)
@@ -806,6 +846,10 @@ static char *jpake_secret = NULL;
 		else if	(strcmp(*argv,"-trace") == 0)
 			c_msg=2;
 #endif
+		else if	(strcmp(*argv,"-security_debug") == 0)
+			{ sdebug=1; }
+		else if	(strcmp(*argv,"-security_debug_verbose") == 0)
+			{ sdebug=2; }
 		else if	(strcmp(*argv,"-showcerts") == 0)
 			c_showcerts=1;
 		else if	(strcmp(*argv,"-nbio_test") == 0)
@@ -968,6 +1012,34 @@ static char *jpake_secret = NULL;
 			next_proto_neg_in = *(++argv);
 			}
 # endif
+		else if (strcmp(*argv,"-alpn") == 0)
+			{
+			if (--argc < 1) goto bad;
+			alpn_in = *(++argv);
+			}
+		else if (strcmp(*argv,"-serverinfo") == 0)
+			{
+			char *c;
+			int start = 0;
+			int len;
+
+			if (--argc < 1) goto bad;
+			c = *(++argv);
+			serverinfo_types_count = 0;
+			len = strlen(c);
+			for (i = 0; i <= len; ++i)
+				{
+				if (i == len || c[i] == ',')
+					{
+					serverinfo_types[serverinfo_types_count]
+					    = atoi(c+start);
+					serverinfo_types_count++;
+					start = i+1;
+					}
+				if (serverinfo_types_count == MAX_SI_TYPES)
+					break;
+				}
+			}
 #endif
 #ifdef FIONBIO
 		else if (strcmp(*argv,"-nbio") == 0)
@@ -1054,6 +1126,11 @@ bad:
 		goto end;
 		}
 
+	if (unix_path && (socket_type != SOCK_STREAM))
+		{
+		BIO_printf(bio_err, "Can't use unix sockets and datagrams together\n");
+			goto end;
+		}
 #if !defined(OPENSSL_NO_JPAKE) && !defined(OPENSSL_NO_PSK)
 	if (jpake_secret)
 		{
@@ -1206,6 +1283,9 @@ bad:
 		goto end;
 		}
 
+	if (sdebug)
+		ssl_ctx_security_debug(ctx, bio_err, sdebug);
+
 	if (vpm)
 		SSL_CTX_set1_param(ctx, vpm);
 
@@ -1257,9 +1337,34 @@ bad:
 	 */
 	if (socket_type == SOCK_DGRAM) SSL_CTX_set_read_ahead(ctx, 1);
 
-#if !defined(OPENSSL_NO_TLSEXT) && !defined(OPENSSL_NO_NEXTPROTONEG)
+#if !defined(OPENSSL_NO_TLSEXT)
+# if !defined(OPENSSL_NO_NEXTPROTONEG)
 	if (next_proto.data)
 		SSL_CTX_set_next_proto_select_cb(ctx, next_proto_cb, &next_proto);
+# endif
+	if (alpn_in)
+		{
+		unsigned short alpn_len;
+		unsigned char *alpn = next_protos_parse(&alpn_len, alpn_in);
+
+		if (alpn == NULL)
+			{
+			BIO_printf(bio_err, "Error parsing -alpn argument\n");
+			goto end;
+			}
+		SSL_CTX_set_alpn_protos(ctx, alpn, alpn_len);
+		OPENSSL_free(alpn);
+		}
+#endif
+#ifndef OPENSSL_NO_TLSEXT
+		for (i = 0; i < serverinfo_types_count; i++)
+			{
+			SSL_CTX_add_client_custom_ext(ctx,
+						      serverinfo_types[i],
+						      NULL, NULL, NULL,
+						      serverinfo_cli_parse_cb,
+						      NULL);
+			}
 #endif
 
 	if (state) SSL_CTX_set_info_callback(ctx,apps_ssl_info_callback);
@@ -1308,9 +1413,6 @@ bad:
 		}
 
 #endif
-	if (c_proof_debug)
-		SSL_CTX_set_tlsext_authz_server_audit_proof_cb(ctx,
-							       audit_proof_cb);
 #endif
 
 	con=SSL_new(ctx);
@@ -1363,8 +1465,12 @@ bad:
 #endif
 
 re_start:
-
+#ifdef NO_SYS_UN_H
 	if (init_client(&s,host,port,socket_type) == 0)
+#else
+	if ((!unix_path && (init_client(&s,host,port,socket_type) == 0)) ||
+			(unix_path && (init_client_unix(&s,unix_path) == 0)))
+#endif
 		{
 		BIO_printf(bio_err,"connect:errno=%d\n",get_last_socket_error());
 		SHUTDOWN(s);
@@ -1586,14 +1692,18 @@ SSL_set_tlsext_status_ids(con, ids);
 		int seen = 0;
 		BIO_printf(sbio,"<stream:stream "
 		    "xmlns:stream='http://etherx.jabber.org/streams' "
-		    "xmlns='jabber:client' to='%s' version='1.0'>", host);
+		    "xmlns='jabber:client' to='%s' version='1.0'>", xmpphost ?
+			   xmpphost : host);
 		seen = BIO_read(sbio,mbuf,BUFSIZZ);
 		mbuf[seen] = 0;
-		while (!strstr(mbuf, "<starttls xmlns='urn:ietf:params:xml:ns:xmpp-tls'"))
+		while (!strstr(mbuf, "<starttls xmlns='urn:ietf:params:xml:ns:xmpp-tls'") &&
+				!strstr(mbuf, "<starttls xmlns=\"urn:ietf:params:xml:ns:xmpp-tls\""))
 			{
-			if (strstr(mbuf, "/stream:features>"))
-				goto shut;
 			seen = BIO_read(sbio,mbuf,BUFSIZZ);
+
+			if (seen <= 0)
+				goto shut;
+
 			mbuf[seen] = 0;
 			}
 		BIO_printf(sbio, "<starttls xmlns='urn:ietf:params:xml:ns:xmpp-tls'/>");
@@ -1651,6 +1761,7 @@ SSL_set_tlsext_status_ids(con, ids);
 						"CONNECTION ESTABLISHED\n");
 					print_ssl_summary(bio_err, con);
 					}
+
 				print_stuff(bio_c_out,con,full_log);
 				if (full_log > 0) full_log--;
 
@@ -1771,7 +1882,7 @@ SSL_set_tlsext_status_ids(con, ids);
 
 		if ((SSL_version(con) == DTLS1_VERSION) && DTLSv1_handle_timeout(con) > 0)
 			{
-			BIO_printf(bio_err,"TIMEOUT occured\n");
+			BIO_printf(bio_err,"TIMEOUT occurred\n");
 			}
 
 		if (!ssl_pending && FD_ISSET(SSL_get_fd(con),&writefds))
@@ -2203,7 +2314,8 @@ static void print_stuff(BIO *bio, SSL *s, int full)
 	}
 #endif
 
-#if !defined(OPENSSL_NO_TLSEXT) && !defined(OPENSSL_NO_NEXTPROTONEG)
+#if !defined(OPENSSL_NO_TLSEXT)
+# if !defined(OPENSSL_NO_NEXTPROTONEG)
 	if (next_proto.status != -1) {
 		const unsigned char *proto;
 		unsigned int proto_len;
@@ -2211,6 +2323,20 @@ static void print_stuff(BIO *bio, SSL *s, int full)
 		BIO_printf(bio, "Next protocol: (%d) ", next_proto.status);
 		BIO_write(bio, proto, proto_len);
 		BIO_write(bio, "\n", 1);
+	}
+# endif
+	{
+		const unsigned char *proto;
+		unsigned int proto_len;
+		SSL_get0_alpn_selected(s, &proto, &proto_len);
+		if (proto_len > 0)
+			{
+			BIO_printf(bio, "ALPN protocol: ");
+			BIO_write(bio, proto, proto_len);
+			BIO_write(bio, "\n", 1);
+			}
+		else
+			BIO_printf(bio, "No ALPN negotiated\n");
 	}
 #endif
 
@@ -2285,26 +2411,4 @@ static int ocsp_resp_cb(SSL *s, void *arg)
 	return 1;
 	}
 
-static int audit_proof_cb(SSL *s, void *arg)
-	{
-	const unsigned char *proof;
-	size_t proof_len;
-	size_t i;
-	SSL_SESSION *sess = SSL_get_session(s);
-
-	proof = SSL_SESSION_get_tlsext_authz_server_audit_proof(sess,
-								&proof_len);
-	if (proof != NULL)
-		{
-		BIO_printf(bio_c_out, "Audit proof: ");
-		for (i = 0; i < proof_len; ++i)
-			BIO_printf(bio_c_out, "%02X", proof[i]);
-		BIO_printf(bio_c_out, "\n");
-		}
-	else
-		{
-		BIO_printf(bio_c_out, "No audit proof found.\n");
-		}
-	return 1;
-	}
 #endif

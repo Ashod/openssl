@@ -15,9 +15,10 @@
 /include
 /*.pc
 /rehash.time
-/out.dbg
-/outinc
-/tmp.dbg
+/inc.*
+/makefile.*
+/out.*
+/tmp.*
 
 # Most *.c files under test/ are symlinks
 /test/*.c
@@ -28,6 +29,7 @@
 !/test/igetest.c
 !/test/r160test.c
 !/test/fips_algvs.c
+!/test/testutil.c
 
 /test/*.ss
 /test/*.srl
@@ -80,3 +82,5 @@
 lib
 Makefile.save
 *.bak
+tags
+TAGS

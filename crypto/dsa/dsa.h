@@ -91,12 +91,18 @@
 #define OPENSSL_DSA_FIPS_MIN_MODULUS_BITS 1024
 
 #define DSA_FLAG_CACHE_MONT_P	0x01
-#define DSA_FLAG_NO_EXP_CONSTTIME       0x02 /* new with 0.9.7h; the built-in DSA
-                                              * implementation now uses constant time
-                                              * modular exponentiation for secret exponents
-                                              * by default. This flag causes the
-                                              * faster variable sliding window method to
-                                              * be used for all exponents.
+#define DSA_FLAG_NO_EXP_CONSTTIME       0x02 /* new with 0.9.7h; the
+                                              * built-in DSA
+                                              * implementation now
+                                              * uses constant time
+                                              * modular exponentiation
+                                              * for secret exponents
+                                              * by default. This flag
+                                              * causes the faster
+                                              * variable sliding
+                                              * window method to be
+                                              * used for all
+                                              * exponents.
                                               */
 
 /* If this flag is set the DSA method is FIPS compliant and can be used
@@ -228,6 +234,7 @@ void	DSA_free (DSA *r);
 /* "up" the DSA object's reference count */
 int	DSA_up_ref(DSA *r);
 int	DSA_size(const DSA *);
+int	DSA_security_bits(const DSA *d);
 	/* next 4 return -1 on error */
 int	DSA_sign_setup( DSA *dsa,BN_CTX *ctx_in,BIGNUM **kinvp,BIGNUM **rp);
 int	DSA_sign(int type,const unsigned char *dgst,int dlen,

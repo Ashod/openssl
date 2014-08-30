@@ -1,6 +1,6 @@
 /* crypto/bn/bn_err.c */
 /* ====================================================================
- * Copyright (c) 1999-2007 The OpenSSL Project.  All rights reserved.
+ * Copyright (c) 1999-2013 The OpenSSL Project.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -87,6 +87,8 @@ static ERR_STRING_DATA BN_str_functs[]=
 {ERR_FUNC(BN_F_BN_EXP),	"BN_exp"},
 {ERR_FUNC(BN_F_BN_EXPAND2),	"bn_expand2"},
 {ERR_FUNC(BN_F_BN_EXPAND_INTERNAL),	"BN_EXPAND_INTERNAL"},
+{ERR_FUNC(BN_F_BN_GENERATE_DSA_NONCE),	"BN_generate_dsa_nonce"},
+{ERR_FUNC(BN_F_BN_GENERATE_PRIME_EX),	"BN_generate_prime_ex"},
 {ERR_FUNC(BN_F_BN_GF2M_MOD),	"BN_GF2m_mod"},
 {ERR_FUNC(BN_F_BN_GF2M_MOD_EXP),	"BN_GF2m_mod_exp"},
 {ERR_FUNC(BN_F_BN_GF2M_MOD_MUL),	"BN_GF2m_mod_mul"},
@@ -118,6 +120,7 @@ static ERR_STRING_DATA BN_str_reasons[]=
 {ERR_REASON(BN_R_ARG2_LT_ARG3)           ,"arg2 lt arg3"},
 {ERR_REASON(BN_R_BAD_RECIPROCAL)         ,"bad reciprocal"},
 {ERR_REASON(BN_R_BIGNUM_TOO_LONG)        ,"bignum too long"},
+{ERR_REASON(BN_R_BITS_TOO_SMALL)         ,"bits too small"},
 {ERR_REASON(BN_R_CALLED_WITH_EVEN_MODULUS),"called with even modulus"},
 {ERR_REASON(BN_R_DIV_BY_ZERO)            ,"div by zero"},
 {ERR_REASON(BN_R_ENCODING_ERROR)         ,"encoding error"},
@@ -129,6 +132,7 @@ static ERR_STRING_DATA BN_str_reasons[]=
 {ERR_REASON(BN_R_NOT_INITIALIZED)        ,"not initialized"},
 {ERR_REASON(BN_R_NO_INVERSE)             ,"no inverse"},
 {ERR_REASON(BN_R_NO_SOLUTION)            ,"no solution"},
+{ERR_REASON(BN_R_PRIVATE_KEY_TOO_LARGE)  ,"private key too large"},
 {ERR_REASON(BN_R_P_IS_NOT_PRIME)         ,"p is not prime"},
 {ERR_REASON(BN_R_TOO_MANY_ITERATIONS)    ,"too many iterations"},
 {ERR_REASON(BN_R_TOO_MANY_TEMPORARY_VARIABLES),"too many temporary variables"},

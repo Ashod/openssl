@@ -239,14 +239,6 @@ dtls1_buffer_record(SSL *s, record_pqueue *queue, unsigned char *priority)
 	}
 #endif
 
-	/* insert should not fail, since duplicates are dropped */
-	if (pqueue_insert(queue->q, item) == NULL)
-		{
-		OPENSSL_free(rdata);
-		pitem_free(item);
-		return(0);
-		}
-
 	s->packet = NULL;
 	s->packet_length = 0;
 	memset(&(s->s3->rbuf), 0, sizeof(SSL3_BUFFER));
@@ -259,7 +251,16 @@ dtls1_buffer_record(SSL *s, record_pqueue *queue, unsigned char *priority)
 		pitem_free(item);
 		return(0);
 		}
-	
+
+	/* insert should not fail, since duplicates are dropped */
+	if (pqueue_insert(queue->q, item) == NULL)
+		{
+		SSLerr(SSL_F_DTLS1_BUFFER_RECORD, ERR_R_INTERNAL_ERROR);
+		OPENSSL_free(rdata);
+		pitem_free(item);
+		return(0);
+		}
+
 	return(1);
 	}
 
@@ -757,9 +758,8 @@ int dtls1_read_bytes(SSL *s, int type, unsigned char *buf, int len, int peek)
 		if (!ssl3_setup_buffers(s))
 			return(-1);
 
-    /* XXX: check what the second '&& type' is about */
 	if ((type && (type != SSL3_RT_APPLICATION_DATA) && 
-		(type != SSL3_RT_HANDSHAKE) && type) ||
+		(type != SSL3_RT_HANDSHAKE)) ||
 	    (peek && (type != SSL3_RT_APPLICATION_DATA)))
 		{
 		SSLerr(SSL_F_DTLS1_READ_BYTES, ERR_R_INTERNAL_ERROR);
@@ -846,6 +846,12 @@ start:
 			else
 				goto start;
 			}
+		}
+
+	if (s->d1->listen && rr->type != SSL3_RT_HANDSHAKE)
+		{
+		rr->length = 0;
+		goto start;
 		}
 
 	/* we now have a packet which can be read and processed */
@@ -1052,6 +1058,7 @@ start:
 			!(s->s3->flags & SSL3_FLAGS_NO_RENEGOTIATE_CIPHERS) &&
 			!s->s3->renegotiate)
 			{
+			s->d1->handshake_read_seq++;
 			s->new_session = 1;
 			ssl3_renegotiate(s);
 			if (ssl3_renegotiate_check(s))
@@ -1550,9 +1557,7 @@ int do_dtls1_write(SSL *s, int type, const unsigned char *buf, unsigned int len,
 	 * we haven't decided which version to use yet send back using 
 	 * version 1.0 header: otherwise some clients will ignore it.
 	 */
-	if (s->state == DTLS1_ST_SW_HELLO_VERIFY_REQUEST_B
-			&& s->method->version == DTLS_ANY_VERSION
-			&& s->client_version == DTLS1_VERSION)
+	if (s->method->version == DTLS_ANY_VERSION)
 		{
 		*(p++)=DTLS1_VERSION>>8;
 		*(p++)=DTLS1_VERSION&0xff;

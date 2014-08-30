@@ -160,6 +160,8 @@ int ssl3_send_finished(SSL *s, int a, int b, const char *sender, int slen)
 
 		i=s->method->ssl3_enc->final_finish_mac(s,
 			sender,slen,s->s3->tmp.finish_md);
+		if (i == 0)
+			return 0;
 		s->s3->tmp.finish_md_len = i;
 		memcpy(p, s->s3->tmp.finish_md, i);
 		l=i;
@@ -201,7 +203,11 @@ static void ssl3_take_mac(SSL *s)
 	{
 	const char *sender;
 	int slen;
-
+	/* If no new cipher setup return immediately: other functions will
+	 * set the appropriate error.
+	 */
+	if (s->s3->tmp.new_cipher == NULL)
+		return;
 	if (s->state & SSL_ST_CONNECT)
 		{
 		sender=s->method->ssl3_enc->server_finished_label;
@@ -689,7 +695,7 @@ int ssl3_setup_read_buffer(SSL *s)
 			len += SSL3_RT_MAX_EXTRA;
 			}
 #ifndef OPENSSL_NO_COMP
-		if (!(s->options & SSL_OP_NO_COMPRESSION))
+		if (ssl_allow_compression(s))
 			len += SSL3_RT_MAX_COMPRESSED_OVERHEAD;
 #endif
 		if ((p=freelist_extract(s->ctx, 1, len)) == NULL)
@@ -726,7 +732,7 @@ int ssl3_setup_write_buffer(SSL *s)
 			+ SSL3_RT_SEND_MAX_ENCRYPTED_OVERHEAD
 			+ headerlen + align;
 #ifndef OPENSSL_NO_COMP
-		if (!(s->options & SSL_OP_NO_COMPRESSION))
+		if (ssl_allow_compression(s))
 			len += SSL3_RT_MAX_COMPRESSED_OVERHEAD;
 #endif
 		if (!(s->options & SSL_OP_DONT_INSERT_EMPTY_FRAGMENTS))
@@ -774,5 +780,12 @@ int ssl3_release_read_buffer(SSL *s)
 		s->s3->rbuf.buf = NULL;
 		}
 	return 1;
+	}
+
+int ssl_allow_compression(SSL *s)
+	{
+	if (s->options & SSL_OP_NO_COMPRESSION)
+		return 0;
+	return ssl_security(s, SSL_SECOP_COMPRESSION, 0, 0, NULL);
 	}
 

@@ -65,7 +65,6 @@
 
 #include <assert.h>
 #include <limits.h>
-#include <stdio.h>
 #include "cryptlib.h"
 #include "bn_lcl.h"
 
@@ -324,6 +323,15 @@ static BN_ULONG *bn_expand_internal(const BIGNUM *b, int words)
 		BNerr(BN_F_BN_EXPAND_INTERNAL,ERR_R_MALLOC_FAILURE);
 		return(NULL);
 		}
+#ifdef PURIFY
+	/* Valgrind complains in BN_consttime_swap because we process the whole
+	 * array even if it's not initialised yet. This doesn't matter in that
+	 * function - what's important is constant time operation (we're not
+	 * actually going to use the data)
+	*/
+	memset(a, 0, sizeof(BN_ULONG)*words);
+#endif
+
 #if 1
 	B=b->d;
 	/* Check if the previous number needs to be copied */
@@ -827,4 +835,81 @@ int bn_cmp_part_words(const BN_ULONG *a, const BN_ULONG *b,
 			}
 		}
 	return bn_cmp_words(a,b,cl);
+	}
+
+/* 
+ * Constant-time conditional swap of a and b.  
+ * a and b are swapped if condition is not 0.  The code assumes that at most one bit of condition is set.
+ * nwords is the number of words to swap.  The code assumes that at least nwords are allocated in both a and b,
+ * and that no more than nwords are used by either a or b.
+ * a and b cannot be the same number
+ */
+void BN_consttime_swap(BN_ULONG condition, BIGNUM *a, BIGNUM *b, int nwords)
+	{
+	BN_ULONG t;
+	int i;
+
+	bn_wcheck_size(a, nwords);
+	bn_wcheck_size(b, nwords);
+
+	assert(a != b);
+	assert((condition & (condition - 1)) == 0);
+	assert(sizeof(BN_ULONG) >= sizeof(int));
+
+	condition = ((condition - 1) >> (BN_BITS2 - 1)) - 1;
+
+	t = (a->top^b->top) & condition;
+	a->top ^= t;
+	b->top ^= t;
+
+#define BN_CONSTTIME_SWAP(ind) \
+	do { \
+		t = (a->d[ind] ^ b->d[ind]) & condition; \
+		a->d[ind] ^= t; \
+		b->d[ind] ^= t; \
+	} while (0)
+
+
+	switch (nwords) {
+	default:
+		for (i = 10; i < nwords; i++) 
+			BN_CONSTTIME_SWAP(i);
+		/* Fallthrough */
+	case 10: BN_CONSTTIME_SWAP(9); /* Fallthrough */
+	case 9: BN_CONSTTIME_SWAP(8); /* Fallthrough */
+	case 8: BN_CONSTTIME_SWAP(7); /* Fallthrough */
+	case 7: BN_CONSTTIME_SWAP(6); /* Fallthrough */
+	case 6: BN_CONSTTIME_SWAP(5); /* Fallthrough */
+	case 5: BN_CONSTTIME_SWAP(4); /* Fallthrough */
+	case 4: BN_CONSTTIME_SWAP(3); /* Fallthrough */
+	case 3: BN_CONSTTIME_SWAP(2); /* Fallthrough */
+	case 2: BN_CONSTTIME_SWAP(1); /* Fallthrough */
+	case 1: BN_CONSTTIME_SWAP(0);
+	}
+#undef BN_CONSTTIME_SWAP
+}
+
+/* Bits of security, see SP800-57 */
+
+int BN_security_bits(int L, int N)
+	{
+	int secbits, bits;
+	if (L >= 15360)
+		secbits = 256;
+	else if (L >= 7690)
+		secbits = 192;
+	else if (L >= 3072)
+		secbits = 128;
+	else if (L >= 2048)
+		secbits = 112;
+	else if (L >= 1024)
+		secbits = 80;
+	else
+		return 0;
+	if (N == -1)
+		return secbits;
+	bits = N / 2;
+	if (bits < 80)
+		return 0;
+	return bits >= secbits ? secbits : bits;
 	}

@@ -420,6 +420,7 @@ int	BN_rand_range(BIGNUM *rnd, const BIGNUM *range);
 int	BN_pseudo_rand_range(BIGNUM *rnd, const BIGNUM *range);
 int	BN_num_bits(const BIGNUM *a);
 int	BN_num_bits_word(BN_ULONG l);
+int	BN_security_bits(int L, int N);
 BIGNUM *BN_new(void);
 void	BN_init(BIGNUM *);
 void	BN_clear_free(BIGNUM *a);
@@ -519,6 +520,8 @@ BIGNUM *BN_mod_inverse(BIGNUM *ret,
 	const BIGNUM *a, const BIGNUM *n,BN_CTX *ctx);
 BIGNUM *BN_mod_sqrt(BIGNUM *ret,
 	const BIGNUM *a, const BIGNUM *n,BN_CTX *ctx);
+
+void	BN_consttime_swap(BN_ULONG swap, BIGNUM *a, BIGNUM *b, int nwords);
 
 /* Deprecated versions */
 #ifndef OPENSSL_NO_DEPRECATED
@@ -676,6 +679,10 @@ const BIGNUM *BN_get0_nist_prime_521(void);
 
 int (*BN_nist_mod_func(const BIGNUM *p))(BIGNUM *r, const BIGNUM *a, const BIGNUM *field, BN_CTX *ctx);
 
+int BN_generate_dsa_nonce(BIGNUM *out, const BIGNUM *range, const BIGNUM *priv,
+			  const unsigned char *message, size_t message_len,
+			  BN_CTX *ctx);
+
 /* library internal functions */
 
 #define bn_expand(a,bits) ((((((bits+BN_BITS2-1))/BN_BITS2)) <= (a)->dmax)?\
@@ -758,11 +765,20 @@ int RAND_pseudo_bytes(unsigned char *buf,int num);
 
 #define bn_fix_top(a)		bn_check_top(a)
 
+#define bn_check_size(bn, bits) bn_wcheck_size(bn, ((bits+BN_BITS2-1))/BN_BITS2)
+#define bn_wcheck_size(bn, words) \
+	do { \
+		const BIGNUM *_bnum2 = (bn); \
+		assert(words <= (_bnum2)->dmax && words >= (_bnum2)->top); \
+	} while(0)
+
 #else /* !BN_DEBUG */
 
 #define bn_pollute(a)
 #define bn_check_top(a)
 #define bn_fix_top(a)		bn_correct_top(a)
+#define bn_check_size(bn, bits)
+#define bn_wcheck_size(bn, words)
 
 #endif
 
@@ -826,6 +842,8 @@ void ERR_load_BN_strings(void);
 #define BN_F_BN_EXP					 123
 #define BN_F_BN_EXPAND2					 108
 #define BN_F_BN_EXPAND_INTERNAL				 120
+#define BN_F_BN_GENERATE_DSA_NONCE			 140
+#define BN_F_BN_GENERATE_PRIME_EX			 141
 #define BN_F_BN_GF2M_MOD				 131
 #define BN_F_BN_GF2M_MOD_EXP				 132
 #define BN_F_BN_GF2M_MOD_MUL				 133
@@ -854,6 +872,7 @@ void ERR_load_BN_strings(void);
 #define BN_R_ARG2_LT_ARG3				 100
 #define BN_R_BAD_RECIPROCAL				 101
 #define BN_R_BIGNUM_TOO_LONG				 114
+#define BN_R_BITS_TOO_SMALL				 118
 #define BN_R_CALLED_WITH_EVEN_MODULUS			 102
 #define BN_R_DIV_BY_ZERO				 103
 #define BN_R_ENCODING_ERROR				 104
@@ -865,6 +884,7 @@ void ERR_load_BN_strings(void);
 #define BN_R_NOT_INITIALIZED				 107
 #define BN_R_NO_INVERSE					 108
 #define BN_R_NO_SOLUTION				 116
+#define BN_R_PRIVATE_KEY_TOO_LARGE			 117
 #define BN_R_P_IS_NOT_PRIME				 112
 #define BN_R_TOO_MANY_ITERATIONS			 113
 #define BN_R_TOO_MANY_TEMPORARY_VARIABLES		 109

@@ -82,7 +82,7 @@ extern "C" {
 #define DEVRANDOM "/dev/urandom","/dev/random","/dev/srandom"
 #endif
 #ifndef DEVRANDOM_EGD
-/* set this to a comma-seperated list of 'egd' sockets to try out. These
+/* set this to a comma-separated list of 'egd' sockets to try out. These
  * sockets will be tried in the order listed in case accessing the device files
  * listed in DEVRANDOM did not return enough entropy. */
 #define DEVRANDOM_EGD "/var/run/egd-pool","/dev/egd-pool","/etc/egd-pool","/etc/entropy"
@@ -134,6 +134,7 @@ extern "C" {
 #endif
 
 #ifdef WIN32
+#define NO_SYS_UN_H
 #define get_last_sys_error()	GetLastError()
 #define clear_sys_error()	SetLastError(0)
 #if !defined(WINNT)
@@ -310,7 +311,7 @@ static unsigned int _strlen31(const char *str)
 #      undef isxdigit
 #    endif
 #    if defined(_MSC_VER) && !defined(_WIN32_WCE) && !defined(_DLL) && defined(stdin)
-#      if _MSC_VER>=1300
+#      if _MSC_VER>=1300 && _MSC_VER<1600
 #        undef stdin
 #        undef stdout
 #        undef stderr
@@ -318,7 +319,7 @@ static unsigned int _strlen31(const char *str)
 #        define stdin  (&__iob_func()[0])
 #        define stdout (&__iob_func()[1])
 #        define stderr (&__iob_func()[2])
-#      elif defined(I_CAN_LIVE_WITH_LNK4049)
+#      elif _MSC_VER<1300 && defined(I_CAN_LIVE_WITH_LNK4049)
 #        undef stdin
 #        undef stdout
 #        undef stderr
@@ -372,6 +373,22 @@ static unsigned int _strlen31(const char *str)
 #  else
 #    define DEFAULT_HOME  "C:"
 #  endif
+
+/* Avoid Windows 8 SDK GetVersion deprecated problems */
+#if defined(_MSC_VER) && _MSC_VER>=1800
+#  define check_winnt() (1)
+#else
+#  define check_winnt() (GetVersion() < 0x80000000)
+#endif
+
+/*
+ * Visual Studio: inline is available in C++ only, however
+ * __inline is available for C, see
+ * http://msdn.microsoft.com/en-us/library/z8y1yy88.aspx
+ */
+#if defined(_MSC_VER) && !defined(__cplusplus) && !defined(inline)
+#  define inline __inline
+#endif
 
 #else /* The non-microsoft world */
 
@@ -572,6 +589,16 @@ static unsigned int _strlen31(const char *str)
 #      include <inet.h>
 #    else
 #      include <sys/socket.h>
+#      ifndef NO_SYS_UN_H
+#        ifdef OPENSSL_SYS_VXWORKS
+#          include <streams/un.h>
+#        else
+#          include <sys/un.h>
+#        endif
+#        ifndef UNIX_PATH_MAX
+#          define UNIX_PATH_MAX sizeof(((struct sockaddr_un *)NULL)->sun_path)
+#        endif
+#      endif
 #      ifdef FILIO_H
 #        include <sys/filio.h> /* Added for FIONBIO under unixware */
 #      endif
@@ -736,4 +763,3 @@ struct servent *getservbyname(const char *name, const char *proto);
 #endif
 
 #endif
-

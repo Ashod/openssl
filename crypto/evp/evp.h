@@ -300,6 +300,12 @@ struct env_md_ctx_st
 #define EVP_MD_CTX_FLAG_PAD_PSS		0x20	/* PSS mode */
 
 #define EVP_MD_CTX_FLAG_NO_INIT		0x0100 /* Don't initialize md_data */
+/* Some functions such as EVP_DigestSign only finalise copies of internal
+ * contexts so additional data can be included after the finalisation call.
+ * This is inefficient if this functionality is not required: it is disabled
+ * if the following flag is set.
+ */
+#define EVP_MD_CTX_FLAG_FINALISE	0x0200
 
 struct evp_cipher_st
 	{
@@ -333,6 +339,7 @@ struct evp_cipher_st
 #define		EVP_CIPH_GCM_MODE		0x6
 #define		EVP_CIPH_CCM_MODE		0x7
 #define		EVP_CIPH_XTS_MODE		0x10001
+#define		EVP_CIPH_WRAP_MODE		0x10002
 #define 	EVP_CIPH_MODE			0xF0007
 /* Set if variable length cipher */
 #define 	EVP_CIPH_VARIABLE_LENGTH	0x8
@@ -363,6 +370,14 @@ struct evp_cipher_st
  */
 #define 	EVP_CIPH_FLAG_CUSTOM_CIPHER	0x100000
 #define		EVP_CIPH_FLAG_AEAD_CIPHER	0x200000
+#define		EVP_CIPH_FLAG_TLS1_1_MULTIBLOCK	0x400000
+
+/* Cipher context flag to indicate we can handle
+ * wrap mode: if allowed in older applications it could
+ * overflow buffers.
+ */
+
+#define 	EVP_CIPHER_CTX_FLAG_WRAP_ALLOW	0x1
 
 /* ctrl() values */
 
@@ -394,6 +409,18 @@ struct evp_cipher_st
 #define		EVP_CTRL_AEAD_SET_MAC_KEY	0x17
 /* Set the GCM invocation field, decrypt only */
 #define		EVP_CTRL_GCM_SET_IV_INV		0x18
+
+#define		EVP_CTRL_TLS1_1_MULTIBLOCK_AAD	0x19
+#define		EVP_CTRL_TLS1_1_MULTIBLOCK_ENCRYPT	0x1a
+#define		EVP_CTRL_TLS1_1_MULTIBLOCK_DECRYPT	0x1b
+#define		EVP_CTRL_TLS1_1_MULTIBLOCK_MAX_BUFSIZE	0x1c
+
+typedef struct {
+	unsigned char *out;
+	const unsigned char *inp;
+	size_t len;
+	unsigned int interleave;
+} EVP_CTRL_TLS1_1_MULTIBLOCK_PARAM;
 
 /* GCM TLS constants */
 /* Length of fixed part of IV derived from PRF */
@@ -649,7 +676,7 @@ __owur int	EVP_DigestSignFinal(EVP_MD_CTX *ctx,
 __owur int	EVP_DigestVerifyInit(EVP_MD_CTX *ctx, EVP_PKEY_CTX **pctx,
 			const EVP_MD *type, ENGINE *e, EVP_PKEY *pkey);
 __owur int	EVP_DigestVerifyFinal(EVP_MD_CTX *ctx,
-			unsigned char *sig, size_t siglen);
+			const unsigned char *sig, size_t siglen);
 
 __owur int	EVP_OpenInit(EVP_CIPHER_CTX *ctx,const EVP_CIPHER *type,
 		const unsigned char *ek, int ekl, const unsigned char *iv,
@@ -754,6 +781,7 @@ const EVP_CIPHER *EVP_des_cbc(void);
 const EVP_CIPHER *EVP_des_ede_cbc(void);
 const EVP_CIPHER *EVP_des_ede3_cbc(void);
 const EVP_CIPHER *EVP_desx_cbc(void);
+const EVP_CIPHER *EVP_des_ede3_wrap(void);
 /* This should now be supported through the dev_crypto ENGINE. But also, why are
  * rc4 and md5 declarations made here inside a "NO_DES" precompiler branch? */
 #if 0
@@ -820,6 +848,8 @@ const EVP_CIPHER *EVP_aes_128_ctr(void);
 const EVP_CIPHER *EVP_aes_128_ccm(void);
 const EVP_CIPHER *EVP_aes_128_gcm(void);
 const EVP_CIPHER *EVP_aes_128_xts(void);
+const EVP_CIPHER *EVP_aes_128_wrap(void);
+const EVP_CIPHER *EVP_aes_128_wrap_pad(void);
 const EVP_CIPHER *EVP_aes_192_ecb(void);
 const EVP_CIPHER *EVP_aes_192_cbc(void);
 const EVP_CIPHER *EVP_aes_192_cfb1(void);
@@ -830,6 +860,8 @@ const EVP_CIPHER *EVP_aes_192_ofb(void);
 const EVP_CIPHER *EVP_aes_192_ctr(void);
 const EVP_CIPHER *EVP_aes_192_ccm(void);
 const EVP_CIPHER *EVP_aes_192_gcm(void);
+const EVP_CIPHER *EVP_aes_192_wrap(void);
+const EVP_CIPHER *EVP_aes_192_wrap_pad(void);
 const EVP_CIPHER *EVP_aes_256_ecb(void);
 const EVP_CIPHER *EVP_aes_256_cbc(void);
 const EVP_CIPHER *EVP_aes_256_cfb1(void);
@@ -841,10 +873,16 @@ const EVP_CIPHER *EVP_aes_256_ctr(void);
 const EVP_CIPHER *EVP_aes_256_ccm(void);
 const EVP_CIPHER *EVP_aes_256_gcm(void);
 const EVP_CIPHER *EVP_aes_256_xts(void);
-#if !defined(OPENSSL_NO_SHA) && !defined(OPENSSL_NO_SHA1)
+const EVP_CIPHER *EVP_aes_256_wrap(void);
+const EVP_CIPHER *EVP_aes_256_wrap_pad(void);
+# if !defined(OPENSSL_NO_SHA) && !defined(OPENSSL_NO_SHA1)
 const EVP_CIPHER *EVP_aes_128_cbc_hmac_sha1(void);
 const EVP_CIPHER *EVP_aes_256_cbc_hmac_sha1(void);
-#endif
+# endif
+# ifndef OPENSSL_NO_SHA256
+const EVP_CIPHER *EVP_aes_128_cbc_hmac_sha256(void);
+const EVP_CIPHER *EVP_aes_256_cbc_hmac_sha256(void);
+# endif
 #endif
 #ifndef OPENSSL_NO_CAMELLIA
 const EVP_CIPHER *EVP_camellia_128_ecb(void);
@@ -922,6 +960,7 @@ int		EVP_PKEY_type(int type);
 int		EVP_PKEY_id(const EVP_PKEY *pkey);
 int		EVP_PKEY_base_id(const EVP_PKEY *pkey);
 int		EVP_PKEY_bits(EVP_PKEY *pkey);
+int		EVP_PKEY_security_bits(const EVP_PKEY *pkey);
 int		EVP_PKEY_size(EVP_PKEY *pkey);
 int 		EVP_PKEY_set_type(EVP_PKEY *pkey,int type);
 int		EVP_PKEY_set_type_str(EVP_PKEY *pkey, const char *str, int len);
@@ -1032,6 +1071,7 @@ void EVP_PBE_cleanup(void);
 #define ASN1_PKEY_CTRL_DEFAULT_MD_NID	0x3
 #define ASN1_PKEY_CTRL_CMS_SIGN		0x5
 #define ASN1_PKEY_CTRL_CMS_ENVELOPE	0x7
+#define ASN1_PKEY_CTRL_CMS_RI_TYPE	0x8
 
 int EVP_PKEY_asn1_get_count(void);
 const EVP_PKEY_ASN1_METHOD *EVP_PKEY_asn1_get0(int idx);
@@ -1079,6 +1119,9 @@ void EVP_PKEY_asn1_set_ctrl(EVP_PKEY_ASN1_METHOD *ameth,
 		int (*pkey_ctrl)(EVP_PKEY *pkey, int op,
 							long arg1, void *arg2));
 
+void EVP_PKEY_asn1_set_security_bits(EVP_PKEY_ASN1_METHOD *ameth,
+				int (*pkey_security_bits)(const EVP_PKEY *pk));
+
 
 #define EVP_PKEY_OP_UNDEFINED		0
 #define EVP_PKEY_OP_PARAMGEN		(1<<1)
@@ -1100,7 +1143,7 @@ void EVP_PKEY_asn1_set_ctrl(EVP_PKEY_ASN1_METHOD *ameth,
 	(EVP_PKEY_OP_ENCRYPT | EVP_PKEY_OP_DECRYPT)
 
 #define EVP_PKEY_OP_TYPE_NOGEN \
-	(EVP_PKEY_OP_SIG | EVP_PKEY_OP_CRYPT | EVP_PKEY_OP_DERIVE)
+	(EVP_PKEY_OP_TYPE_SIG | EVP_PKEY_OP_TYPE_CRYPT | EVP_PKEY_OP_DERIVE)
 
 #define EVP_PKEY_OP_TYPE_GEN \
 		(EVP_PKEY_OP_PARAMGEN | EVP_PKEY_OP_KEYGEN)
@@ -1108,6 +1151,10 @@ void EVP_PKEY_asn1_set_ctrl(EVP_PKEY_ASN1_METHOD *ameth,
 #define	 EVP_PKEY_CTX_set_signature_md(ctx, md)	\
 		EVP_PKEY_CTX_ctrl(ctx, -1, EVP_PKEY_OP_TYPE_SIG,  \
 					EVP_PKEY_CTRL_MD, 0, (void *)md)
+
+#define	 EVP_PKEY_CTX_get_signature_md(ctx, pmd)	\
+		EVP_PKEY_CTX_ctrl(ctx, -1, EVP_PKEY_OP_TYPE_SIG,  \
+					EVP_PKEY_CTRL_GET_MD, 0, (void *)pmd)
 
 #define EVP_PKEY_CTRL_MD		1
 #define EVP_PKEY_CTRL_PEER_KEY		2
@@ -1129,6 +1176,8 @@ void EVP_PKEY_asn1_set_ctrl(EVP_PKEY_ASN1_METHOD *ameth,
 #define EVP_PKEY_CTRL_CMS_SIGN		11
 
 #define EVP_PKEY_CTRL_CIPHER		12
+
+#define EVP_PKEY_CTRL_GET_MD		13
 
 #define EVP_PKEY_ALG_CTRL		0x1000
 
@@ -1431,6 +1480,7 @@ void ERR_load_EVP_strings(void);
 #define EVP_R_UNSUPPORTED_PRF				 125
 #define EVP_R_UNSUPPORTED_PRIVATE_KEY_ALGORITHM		 118
 #define EVP_R_UNSUPPORTED_SALT_TYPE			 126
+#define EVP_R_WRAP_MODE_NOT_ALLOWED			 170
 #define EVP_R_WRONG_FINAL_BLOCK_LENGTH			 109
 #define EVP_R_WRONG_PUBLIC_KEY_TYPE			 110
 

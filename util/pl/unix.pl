@@ -70,7 +70,13 @@ $bf_enc_src="";
 	  'rc4-x86_64' => 'crypto/rc4',
 	  'rc4-md5-x86_64' => 'crypto/rc4',
 	  'ghash-x86_64' => 'crypto/modes',
-          'aesni-gcm-x86_64' => 'crypto/modes',
+	  'aesni-gcm-x86_64' => 'crypto/modes',
+	  'aesni-sha256-x86_64' => 'crypto/aes',
+          'rsaz-x86_64' => 'crypto/bn',
+          'rsaz-avx2' => 'crypto/bn',
+	  'aesni-mb-x86_64' => 'crypto/aes',
+	  'sha1-mb-x86_64' => 'crypto/sha',
+	  'sha256-mb-x86_64' => 'crypto/sha',
          );
 
 # If I were feeling more clever, these could probably be extracted
@@ -81,6 +87,9 @@ sub platform_perlasm_compile_target
 
 	for $p (keys %perl1)
 	        {
+# FIXME: export CC so rsaz-avx2 can test for it, since BSD make does
+# not export variables, unlike GNU make. But this also requires fixing
+# the .s.o rule to use CC!
 		if ($target eq "\$(OBJ_D)/$p.o")
 		        {
 			return << "EOF";
@@ -129,7 +138,7 @@ sub special_compile_target
 		{
 		return << "EOF";
 \$(TMP_D)/x86_64-gcc.o:	crypto/bn/asm/x86_64-gcc.c
-	\$(CC) \$(CFLAGS) -c -o \$@ crypto/bn/asm/x86_64-gcc.c
+	\$(CC) \$(LIB_CFLAGS) -c -o \$@ crypto/bn/asm/x86_64-gcc.c
 EOF
 		}
 	return undef;
@@ -189,13 +198,18 @@ sub fixtests
 
 sub fixdeps
   {
-  my ($str) = @_;
+  my ($str, $fakes) = @_;
 
   my @t = split(/\s+/, $str);
   $str = '';
   foreach my $t (@t)
     {
     $str .= ' ' if $str ne '';
+    if (exists($fakes->{$t}))
+      {
+      $str .= $fakes->{$t};
+      next;
+      }
     if ($t =~ /^[^\/]+$/)
       {
       $str .= '$(TEST_D)/' . $t;
@@ -265,6 +279,7 @@ sub get_tests
   my %deps;
   my %tests;
   my %alltests;
+  my %fakes;
   while (my $line = <M>)
     {
     chomp $line;
@@ -287,7 +302,22 @@ sub get_tests
 	|| $line =~ /^(?<t>test_(ss|gen) .*):(?<d>.*)/)
       {
       my $t = $+{t};
-      $deps{$t} = $+{d};
+      my $d = $+{d};
+      # If there are multiple targets stupid FreeBSD make runs the
+      # rules once for each dependency that matches one of the
+      # targets. Running the same rule twice concurrently causes
+      # breakage, so replace with a fake target.
+      if ($t =~ /\s/)
+        {
+	++$fake;
+	my @targets = split /\s+/, $t;
+	$t = "_fake$fake";
+	foreach my $f (@targets)
+	  {
+	  $fakes{$f} = $t;
+	  }
+	}
+      $deps{$t} = $d;
       $deps{$t} =~ s/#.*$//;
       for (;;)
 	{
@@ -326,7 +356,7 @@ sub get_tests
     $d =~ s/\.\.\/apps/\$(BIN_D)/g;
     $d =~ s/\.\.\/util/\$(TEST_D)/g;
     $d = fixtests($d, \%tests);
-    $d = fixdeps($d);
+    $d = fixdeps($d, \%fakes);
 
     my $r = $targets{$t};
     $r =~ s/\.\.\/apps/..\/\$(BIN_D)/g;
@@ -372,6 +402,9 @@ sub get_tests
 		 'testrsa.pem',
 		 'testsid.pem',
 		 'testss',
+		 'testssl',
+		 'testsslproxy',
+		 'serverinfo.pem',
 	       );
   my $copies = copy_scripts(1, 'test', @copies);
   $copies .= copy_scripts(0, 'test', ('smcont.txt'));
@@ -383,6 +416,7 @@ sub get_tests
 
   my @apps = ( 'CA.sh',
 	       'openssl.cnf',
+	       'server2.pem',
 	     );
   $copies .= copy_scripts(1, 'apps', @apps);
 
@@ -392,7 +426,18 @@ sub get_tests
   $scripts .= "\nocsp:\n\tcp -R test/ocsp-tests \$(TEST_D)\n";
   $scripts .= "\smime:\n\tcp -R test/smime-certs \$(TEST_D)\n";
 
-  my $all = 'test: ' . join(' ', keys %alltests);
+  my $all = 'test:';
+  foreach my $t (keys %alltests)
+    {
+    if (exists($fakes{$t}))
+      {
+      $all .= " $fakes{$t}";
+      }
+    else
+      {
+      $all .= " $t";
+      }
+    }
 
   return "$scripts\n$copies\n$tests\n$all\n\n$each";
   }

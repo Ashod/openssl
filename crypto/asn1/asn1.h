@@ -208,14 +208,14 @@ typedef struct asn1_const_ctx_st
 #define ASN1_OBJECT_FLAG_CRITICAL	 0x02	/* critical x509v3 object id */
 #define ASN1_OBJECT_FLAG_DYNAMIC_STRINGS 0x04	/* internal use */
 #define ASN1_OBJECT_FLAG_DYNAMIC_DATA 	 0x08	/* internal use */
-typedef struct asn1_object_st
+struct asn1_object_st
 	{
 	const char *sn,*ln;
 	int nid;
 	int length;
 	const unsigned char *data;	/* data remains const after init */
 	int flags;	/* Should we free this one */
-	} ASN1_OBJECT;
+	};
 
 #define ASN1_STRING_FLAG_BITS_LEFT 0x08 /* Set if 0x07 has bits left value */
 /* This indicates that the ASN1_STRING is not a real value but just a place
@@ -819,9 +819,9 @@ ASN1_BIT_STRING *c2i_ASN1_BIT_STRING(ASN1_BIT_STRING **a,const unsigned char **p
 int		ASN1_BIT_STRING_set(ASN1_BIT_STRING *a, unsigned char *d,
 			int length );
 int		ASN1_BIT_STRING_set_bit(ASN1_BIT_STRING *a, int n, int value);
-int		ASN1_BIT_STRING_get_bit(ASN1_BIT_STRING *a, int n);
-int            ASN1_BIT_STRING_check(ASN1_BIT_STRING *a,
-                                     unsigned char *flags, int flags_len);
+int		ASN1_BIT_STRING_get_bit(const ASN1_BIT_STRING *a, int n);
+int            ASN1_BIT_STRING_check(const ASN1_BIT_STRING *a,
+                                     const unsigned char *flags, int flags_len);
 
 #ifndef OPENSSL_NO_BIO
 int ASN1_BIT_STRING_name_print(BIO *out, ASN1_BIT_STRING *bs,
@@ -1411,7 +1411,6 @@ void ERR_load_ASN1_strings(void);
 #define ASN1_R_UNKNOWN_PUBLIC_KEY_TYPE			 163
 #define ASN1_R_UNKNOWN_SIGNATURE_ALGORITHM		 199
 #define ASN1_R_UNKNOWN_TAG				 194
-#define ASN1_R_UNKOWN_FORMAT				 195
 #define ASN1_R_UNSUPPORTED_ANY_DEFINED_BY_TYPE		 164
 #define ASN1_R_UNSUPPORTED_CIPHER			 165
 #define ASN1_R_UNSUPPORTED_ENCRYPTION_ALGORITHM		 166

@@ -147,6 +147,11 @@ static struct {
 	{ CRYPTO_AES_CBC,		NID_aes_128_cbc,	16,	16, },
 	{ CRYPTO_AES_CBC,		NID_aes_192_cbc,	16,	24, },
 	{ CRYPTO_AES_CBC,		NID_aes_256_cbc,	16,	32, },
+#ifdef CRYPTO_AES_CTR
+	{ CRYPTO_AES_CTR,		NID_aes_128_ctr,	14,	16, },
+	{ CRYPTO_AES_CTR,		NID_aes_192_ctr,	14,	24, },
+	{ CRYPTO_AES_CTR,		NID_aes_256_ctr,	14,	32, },
+#endif
 	{ CRYPTO_BLF_CBC,		NID_bf_cbc,		8,	16, },
 	{ CRYPTO_CAST_CBC,		NID_cast5_cbc,		8,	16, },
 	{ CRYPTO_SKIPJACK_CBC,		NID_undef,		0,	 0, },
@@ -599,7 +604,46 @@ const EVP_CIPHER cryptodev_aes_256_cbc = {
 	EVP_CIPHER_get_asn1_iv,
 	NULL
 };
+#ifdef CRYPTO_AES_CTR
+const EVP_CIPHER cryptodev_aes_ctr = {
+	NID_aes_128_ctr,
+	16, 16, 14,
+	EVP_CIPH_CTR_MODE,
+	cryptodev_init_key,
+	cryptodev_cipher,
+	cryptodev_cleanup,
+	sizeof(struct dev_crypto_state),
+	EVP_CIPHER_set_asn1_iv,
+	EVP_CIPHER_get_asn1_iv,
+	NULL
+};
 
+const EVP_CIPHER cryptodev_aes_ctr_192 = {
+	NID_aes_192_ctr,
+	16, 24, 14,
+	EVP_CIPH_CTR_MODE,
+	cryptodev_init_key,
+	cryptodev_cipher,
+	cryptodev_cleanup,
+	sizeof(struct dev_crypto_state),
+	EVP_CIPHER_set_asn1_iv,
+	EVP_CIPHER_get_asn1_iv,
+	NULL
+};
+
+const EVP_CIPHER cryptodev_aes_ctr_256 = {
+	NID_aes_256_ctr,
+	16, 32, 14,
+	EVP_CIPH_CTR_MODE,
+	cryptodev_init_key,
+	cryptodev_cipher,
+	cryptodev_cleanup,
+	sizeof(struct dev_crypto_state),
+	EVP_CIPHER_set_asn1_iv,
+	EVP_CIPHER_get_asn1_iv,
+	NULL
+};
+#endif
 /*
  * Registered by the ENGINE when used to find out how to deal with
  * a particular NID in the ENGINE. this says what we'll do at the
@@ -637,6 +681,17 @@ cryptodev_engine_ciphers(ENGINE *e, const EVP_CIPHER **cipher,
 	case NID_aes_256_cbc:
 		*cipher = &cryptodev_aes_256_cbc;
 		break;
+#ifdef CRYPTO_AES_CTR
+	case NID_aes_128_ctr:
+		*cipher = &cryptodev_aes_ctr;
+		break;
+	case NID_aes_192_ctr:
+		*cipher = &cryptodev_aes_ctr_192;
+		break;
+	case NID_aes_256_ctr:
+		*cipher = &cryptodev_aes_ctr_256;
+		break;
+#endif
 	default:
 		*cipher = NULL;
 		break;
@@ -710,6 +765,7 @@ static int cryptodev_digest_update(EVP_MD_CTX *ctx, const void *data,
 	struct crypt_op cryp;
 	struct dev_crypto_state *state = ctx->md_data;
 	struct session_op *sess = &state->d_sess;
+	char *new_mac_data;
 
 	if (!data || state->d_fd < 0) {
 		printf("cryptodev_digest_update: illegal inputs \n");
@@ -722,12 +778,13 @@ static int cryptodev_digest_update(EVP_MD_CTX *ctx, const void *data,
 
 	if (!(ctx->flags & EVP_MD_CTX_FLAG_ONESHOT)) {
 		/* if application doesn't support one buffer */
-		state->mac_data = OPENSSL_realloc(state->mac_data, state->mac_len + count);
+		new_mac_data = OPENSSL_realloc(state->mac_data, state->mac_len + count);
 
-		if (!state->mac_data) {
+		if (!new_mac_data) {
 			printf("cryptodev_digest_update: realloc failed\n");
 			return (0);
 		}
+		state->mac_data = new_mac_data;
 
 		memcpy(state->mac_data + state->mac_len, data, count);
    		state->mac_len += count;
@@ -844,17 +901,22 @@ static int cryptodev_digest_copy(EVP_MD_CTX *to,const EVP_MD_CTX *from)
 	if (ioctl(dstate->d_fd, CIOCGSESSION, sess) < 0) {
 		put_dev_crypto(dstate->d_fd);
 		dstate->d_fd = -1;
-		printf("cryptodev_digest_init: Open session failed\n");
+		printf("cryptodev_digest_copy: Open session failed\n");
 		return (0);
 	}
 
 	if (fstate->mac_len != 0) {
 	        if (fstate->mac_data != NULL)
-	                {
-        		dstate->mac_data = OPENSSL_malloc(fstate->mac_len);
-	        	memcpy(dstate->mac_data, fstate->mac_data, fstate->mac_len);
-           		dstate->mac_len = fstate->mac_len;
-	        	}
+			{
+			dstate->mac_data = OPENSSL_malloc(fstate->mac_len);
+			if (dstate->mac_data == NULL)
+				{
+				printf("cryptodev_digest_copy: mac_data allocation failed\n");
+				return (0);
+				}
+			memcpy(dstate->mac_data, fstate->mac_data, fstate->mac_len);
+			dstate->mac_len = fstate->mac_len;
+			}
 	}
 
 	return 1;

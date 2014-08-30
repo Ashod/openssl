@@ -35,6 +35,7 @@ OpenSSL  -  Frequently Asked Questions
 * What is a "128 bit certificate"? Can I create one with OpenSSL?
 * Why does OpenSSL set the authority key identifier extension incorrectly?
 * How can I set up a bundle of commercial root CA certificates?
+* Some secure servers 'hang' with OpenSSL 1.0.1, is this a bug?
 
 [BUILD] Questions about building and testing OpenSSL
 
@@ -75,6 +76,7 @@ OpenSSL  -  Frequently Asked Questions
 * Why does Valgrind complain about the use of uninitialized data?
 * Why doesn't a memory BIO work when a file does?
 * Where are the declarations and implementations of d2i_X509() etc?
+* When debugging I observe SIGILL during OpenSSL initialization: why?
 
 ===============================================================================
 
@@ -83,7 +85,6 @@ OpenSSL  -  Frequently Asked Questions
 * Which is the current version of OpenSSL?
 
 The current version is available from <URL: http://www.openssl.org>.
-OpenSSL 1.0.1e was released on Feb 11, 2013.
 
 In addition to the current stable release, you can also access daily
 snapshots of the OpenSSL development version at <URL:
@@ -112,11 +113,6 @@ not present in released versions. If in doubt refer to the documentation
 that came with the version of OpenSSL you are using. The pod format
 documentation is included in each OpenSSL distribution under the docs
 directory.
-
-For information on parts of libcrypto that are not yet documented, you
-might want to read Ariel Glenn's documentation on SSLeay 0.9, OpenSSL's
-predecessor, at <URL: http://www.columbia.edu/~ariel/ssleay/>.  Much
-of this still applies to OpenSSL.
 
 There is some documentation about certificate extensions and PKCS#12
 in doc/openssl.txt
@@ -199,10 +195,8 @@ be 0.9.8za then 0.9.8zb and so on.
 
 * Do I need patent licenses to use OpenSSL?
 
-The patents section of the README file lists patents that may apply to
-you if you want to use OpenSSL.  For information on intellectual
-property rights, please consult a lawyer.  The OpenSSL team does not
-offer legal advice.
+For information on intellectual property rights, please consult a lawyer.
+The OpenSSL team does not offer legal advice.
 
 You can configure OpenSSL so as not to use IDEA, MDC2 and RC5 by using
  ./config no-idea no-mdc2 no-rc5
@@ -418,7 +412,7 @@ whatever name they choose.
 The ways to print out the oneline format of the DN (Distinguished Name) have
 been extended in version 0.9.7 of OpenSSL. Using the new X509_NAME_print_ex()
 interface, the "-nameopt" option could be introduded. See the manual
-page of the "openssl x509" commandline tool for details. The old behaviour
+page of the "openssl x509" command line tool for details. The old behaviour
 has however been left as default for the sake of compatibility.
 
 * What is a "128 bit certificate"? Can I create one with OpenSSL?
@@ -440,7 +434,7 @@ software from the US only weak encryption algorithms could be freely exported
 inadequate. A relaxation of the rules allowed the use of strong encryption but
 only to an authorised server.
 
-Two slighly different techniques were developed to support this, one used by
+Two slightly different techniques were developed to support this, one used by
 Netscape was called "step up", the other used by MSIE was called "Server Gated
 Cryptography" (SGC). When a browser initially connected to a server it would
 check to see if the certificate contained certain extensions and was issued by
@@ -489,6 +483,16 @@ Other projects do have other policies so you can for example extract the CA
 bundle used by Mozilla and/or modssl as described in this article:
 
   <URL: http://www.mail-archive.com/modssl-users@modssl.org/msg16980.html>
+
+
+* Some secure servers 'hang' with OpenSSL 1.0.1, is this a bug?
+
+OpenSSL 1.0.1 is the first release to support TLS 1.2, among other things,
+this increases the size of the default ClientHello message to more than
+255 bytes in length. Some software cannot handle this and hangs. For more
+details and workarounds see:
+
+  <URL: http://rt.openssl.org/Ticket/Display.html?user=guest&pass=guest&id=2771>
 
 
 [BUILD] =======================================================================
@@ -619,8 +623,8 @@ valid for the current DOS session.
 * What is special about OpenSSL on Redhat?
 
 Red Hat Linux (release 7.0 and later) include a preinstalled limited
-version of OpenSSL. For patent reasons, support for IDEA, RC5 and MDC2
-is disabled in this version. The same may apply to other Linux distributions.
+version of OpenSSL. Red Hat has chosen to disable support for IDEA, RC5 and
+MDC2 in this version. The same may apply to other Linux distributions.
 Users may therefore wish to install more or all of the features left out.
 
 To do this you MUST ensure that you do not overwrite the openssl that is in
@@ -642,11 +646,6 @@ relevant updates in packages up to and including 0.9.6b.
 
 A possible way around this is to persuade Red Hat to produce a non-US
 version of Red Hat Linux.
-
-FYI: Patent numbers and expiry dates of US patents:
-MDC-2: 4,908,861 13/03/2007
-IDEA:  5,214,703 25/05/2010
-RC5:   5,724,428 03/03/2015
 
 
 * Why does the OpenSSL compilation fail on MacOS X?
@@ -710,7 +709,7 @@ working across wider range of *BSD branches, not just OpenBSD.
 If the test program in question fails withs SIGILL, Illegal Instruction
 exception, then you more than likely to run SSE2-capable CPU, such as
 Intel P4, under control of kernel which does not support SSE2
-instruction extentions. See accompanying INSTALL file and
+instruction extensions. See accompanying INSTALL file and
 OPENSSL_ia32cap(3) documentation page for further information.
 
 * Why does compiler fail to compile sha512.c?
@@ -724,15 +723,15 @@ possible alternative might be to switch to GCC.
 
 * Test suite still fails, what to do?
 
-Another common reason for failure to complete some particular test is
-simply bad code generated by a buggy component in toolchain or deficiency
-in run-time environment. There are few cases documented in PROBLEMS file,
-consult it for possible workaround before you beat the drum. Even if you
-don't find solution or even mention there, do reserve for possibility of
-a compiler bug. Compiler bugs might appear in rather bizarre ways, they
-never make sense, and tend to emerge when you least expect them. In order
-to identify one, drop optimization level, e.g. by editing CFLAG line in
-top-level Makefile, recompile and re-run the test.
+Another common reason for test failures is bugs in the toolchain
+or run-time environment.  Known cases of this are documented in the
+PROBLEMS file, please review it before you beat the drum. Even if you
+don't find anything in that file, please do consider the possibility
+of a compiler bug. Compiler bugs often appear in rather bizarre ways,
+they never make sense, and tend to emerge when you least expect
+them. One thing to try is to reduce the level of optimization (such
+as by editing the CFLAG variable line in the top-level Makefile),
+and then recompile and re-run the test.
 
 * I think I've found a bug, what should I do?
 
@@ -742,8 +741,15 @@ documentation and the mailing lists for similar queries. If you are still
 unsure whether it is a bug or not submit a query to the openssl-users mailing
 list.
 
+If you think you have found a bug based on the output of static analysis tools
+then please manually check the issue is genuine. Such tools can produce a
+LOT of false positives.
+
 
 * I'm SURE I've found a bug, how do I report it?
+
+To avoid duplicated reports check the mailing lists and release notes for the
+relevant version of OpenSSL to see if the problem has been reported already.
 
 Bug reports with no security implications should be sent to the request
 tracker. This can be done by mailing the report to <rt@openssl.org> (or its
@@ -772,7 +778,12 @@ See also <URL: http://www.openssl.org/support/rt.html>
 If you think your bug has security implications then please send it to
 openssl-security@openssl.org if you don't get a prompt reply at least 
 acknowledging receipt then resend or mail it directly to one of the
-more active team members (e.g. Steve).
+more active team members (e.g. Steve). If you wish to use PGP to send
+in a report please use one or more of the keys of the team members listed
+at <URL: http://www.openssl.org/about/>
+
+Note that bugs only present in the openssl utility are not in general
+considered to be security issues. 
 
 [PROG] ========================================================================
 
@@ -1058,5 +1069,20 @@ These are defined and implemented by macros of the form:
 The implementation passes an ASN1 "template" defining the structure into an
 ASN1 interpreter using generalised functions such as ASN1_item_d2i().
 
+* When debugging I observe SIGILL during OpenSSL initialization: why?
+
+OpenSSL adapts to processor it executes on and for this reason has to
+query its capabilities. Unfortunately on some processors the only way
+to achieve this for non-privileged code is to attempt instructions
+that can cause Illegal Instruction exceptions. The initialization
+procedure is coded to handle these exceptions to manipulate corresponding
+bits in capabilities vector. This normally appears transparent, except
+when you execute it under debugger, which stops prior delivering signal
+to handler. Simply resuming execution does the trick, but when debugging
+a lot it might feel counterproductive. Two options. Either set explicit
+capability environment variable in order to bypass the capability query
+(see corresponding crypto/*cap.c for details). Or configure debugger not
+to stop upon SIGILL exception, e.g. in gdb case add 'handle SIGILL nostop'
+to your .gdbinit.
 
 ===============================================================================

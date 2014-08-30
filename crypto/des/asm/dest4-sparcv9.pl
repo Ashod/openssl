@@ -94,6 +94,9 @@ $code.=<<___;
 .globl	des_t4_cbc_encrypt
 .align	32
 des_t4_cbc_encrypt:
+	cmp		$len, 0
+	be,pn		$::size_t_cc, .Lcbc_abort
+	nop
 	ld		[$ivec + 0], %f0	! load ivec
 	ld		[$ivec + 4], %f1
 
@@ -165,6 +168,9 @@ des_t4_cbc_encrypt:
 	st		%f0, [$ivec + 0]	! write out ivec
 	retl
 	st		%f1, [$ivec + 4]
+.Lcbc_abort:
+	retl
+	nop
 
 .align	16
 2:	ldxa		[$inp]0x82, %g4		! avoid read-after-write hazard
@@ -172,10 +178,10 @@ des_t4_cbc_encrypt:
 						! in inp==out case
 	faligndata	%f0, %f0, %f2		! handle unaligned output
 
-	stda		%f8, [$out + $omask]0xc0	! partial store
+	stda		%f2, [$out + $omask]0xc0	! partial store
 	add		$out, 8, $out
 	orn		%g0, $omask, $omask
-	stda		%f8, [$out + $omask]0xc0	! partial store
+	stda		%f2, [$out + $omask]0xc0	! partial store
 
 	brnz,pt		$len, .Ldes_cbc_enc_loop+4
 	orn		%g0, $omask, $omask
@@ -189,6 +195,9 @@ des_t4_cbc_encrypt:
 .globl	des_t4_cbc_decrypt
 .align	32
 des_t4_cbc_decrypt:
+	cmp		$len, 0
+	be,pn		$::size_t_cc, .Lcbc_abort
+	nop
 	ld		[$ivec + 0], %f2	! load ivec
 	ld		[$ivec + 4], %f3
 
@@ -294,6 +303,9 @@ $code.=<<___;
 .globl	des_t4_ede3_cbc_encrypt
 .align	32
 des_t4_ede3_cbc_encrypt:
+	cmp		$len, 0
+	be,pn		$::size_t_cc, .Lcbc_abort
+	nop
 	ld		[$ivec + 0], %f0	! load ivec
 	ld		[$ivec + 4], %f1
 
@@ -443,6 +455,9 @@ des_t4_ede3_cbc_encrypt:
 .globl	des_t4_ede3_cbc_decrypt
 .align	32
 des_t4_ede3_cbc_decrypt:
+	cmp		$len, 0
+	be,pn		$::size_t_cc, .Lcbc_abort
+	nop
 	ld		[$ivec + 0], %f2	! load ivec
 	ld		[$ivec + 4], %f3
 

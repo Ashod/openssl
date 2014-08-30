@@ -44,7 +44,7 @@
 #
 # Optimization including one of Pavel Semjanov's ideas, alternative
 # Maj, resulted in >=5% improvement on most CPUs, +20% SHA256 and
-# unfortunately -10% SHA512 on P4 [which nobody should care about
+# unfortunately -2% SHA512 on P4 [which nobody should care about
 # that much].
 #
 # June 2012.
@@ -67,22 +67,28 @@
 # significant 128-bit halves and data from second to most significant.
 # The data is then processed with same SIMD instruction sequence as
 # for AVX, but with %ymm as operands. Side effect is increased stack
-# frame, 448 additional bytes in SHA256 and 1152 in SHA512.
+# frame, 448 additional bytes in SHA256 and 1152 in SHA512, and 1.2KB
+# code size increase.
+#
+# March 2014.
+#
+# Add support for Intel SHA Extensions.
 
 ######################################################################
 # Current performance in cycles per processed byte (less is better):
 #
 #		SHA256	SSSE3       AVX/XOP(*)	    SHA512  AVX/XOP(*)
 #
-# AMD K8	15.1	-	    -		    9.70    -
-# P4		17.5	-	    -		    33.4    -
-# Core 2	15.5	13.9(+11%)  -		    10.3    -
-# Westmere	15.1	12.5(+21%)  -		    9.72    -
-# Sandy Bridge	17.4	14.0(+24%)  11.6(+50%(**))  11.2    8.10(+38%(**))
-# Ivy Bridge	12.6	10.3(+22%)  10.3(+22%)	    8.17    7.22(+13%)
-# Bulldozer	21.5	13.7(+57%)  13.7(+57%(***)) 13.5    8.58(+57%)
-# VIA Nano	23.0	16.3(+41%)  -		    14.7    -
-# Atom		23.0	21.6(+6%)   -		    14.7    -
+# AMD K8	14.9	-	    -		    9.57    -
+# P4		17.3	-	    -		    30.8    -
+# Core 2	15.6	13.8(+13%)  -		    9.97    -
+# Westmere	14.8	12.3(+19%)  -		    9.58    -
+# Sandy Bridge	17.4	14.2(+23%)  11.6(+50%(**))  11.2    8.10(+38%(**))
+# Ivy Bridge	12.6	10.5(+20%)  10.3(+22%)	    8.17    7.22(+13%)
+# Haswell	12.2	9.28(+31%)  7.80(+56%)	    7.66    5.40(+42%)
+# Bulldozer	21.1	13.6(+54%)  13.6(+54%(***)) 13.5    8.58(+57%)
+# VIA Nano	23.0	16.5(+39%)  -		    14.7    -
+# Atom		23.0	18.9(+22%)  -		    14.7    -
 #
 # (*)	whichever best applicable;
 # (**)	switch from ror to shrd stands for fair share of improvement;
@@ -116,6 +122,13 @@ if (!$avx && $win64 && ($flavour =~ /masm/ || $ENV{ASM} =~ /ml64/) &&
 	   `ml64 2>&1` =~ /Version ([0-9]+)\./) {
 	$avx = ($1>=10) + ($1>=11);
 }
+
+if (!$avx && `$ENV{CC} -v 2>&1` =~ /(^clang version|based on LLVM) ([3-9]\.[0-9]+)/) {
+	$avx = ($2>=3.0) + ($2>3.0);
+}
+
+$shaext=1;	### set to zero if compiling for 1.0.1
+$avx=1		if (!$shaext && $avx);
 
 open OUT,"| \"$^X\" $xlate $flavour $output";
 *STDOUT=*OUT;
@@ -166,8 +179,8 @@ $code.=<<___;
 	ror	\$`$Sigma1[2]-$Sigma1[1]`,$a0
 	mov	$f,$a2
 
-	ror	\$`$Sigma0[2]-$Sigma0[1]`,$a1
 	xor	$e,$a0
+	ror	\$`$Sigma0[2]-$Sigma0[1]`,$a1
 	xor	$g,$a2			# f^g
 
 	mov	$T1,`$SZ*($i&0xf)`(%rsp)
@@ -186,25 +199,22 @@ $code.=<<___;
 	add	($Tbl),$T1		# T1+=K[round]
 	xor	$a,$a1
 
-	ror	\$$Sigma1[0],$a0	# Sigma1(e)
 	xor	$b,$a2			# a^b, b^c in next round
+	ror	\$$Sigma1[0],$a0	# Sigma1(e)
 	mov	$b,$h
 
-	ror	\$$Sigma0[0],$a1	# Sigma0(a)
 	and	$a2,$a3
+	ror	\$$Sigma0[0],$a1	# Sigma0(a)
 	add	$a0,$T1			# T1+=Sigma1(e)
 
 	xor	$a3,$h			# h=Maj(a,b,c)=Ch(a^b,c,b)
 	add	$T1,$d			# d+=T1
 	add	$T1,$h			# h+=T1
-___
-$code.=<<___ if ($i>=15);
-	mov	`$SZ*(($i+2)&0xf)`(%rsp),$a0
-___
-$code.=<<___;
-	lea	$STRIDE($Tbl),$Tbl	# round++
-	add	$a1,$h			# h+=Sigma0(a)
 
+	lea	$STRIDE($Tbl),$Tbl	# round++
+___
+$code.=<<___ if ($i<15);
+	add	$a1,$h			# h+=Sigma0(a)
 ___
 	($a2,$a3) = ($a3,$a2);
 }
@@ -213,28 +223,29 @@ sub ROUND_16_XX()
 { my ($i,$a,$b,$c,$d,$e,$f,$g,$h) = @_;
 
 $code.=<<___;
-	#mov	`$SZ*(($i+1)&0xf)`(%rsp),$a0
-	mov	`$SZ*(($i+14)&0xf)`(%rsp),$a1
+	mov	`$SZ*(($i+1)&0xf)`(%rsp),$a0
+	mov	`$SZ*(($i+14)&0xf)`(%rsp),$a2
 
 	mov	$a0,$T1
 	ror	\$`$sigma0[1]-$sigma0[0]`,$a0
-	mov	$a1,$a2
-	ror	\$`$sigma1[1]-$sigma1[0]`,$a1
+	add	$a1,$a			# modulo-scheduled h+=Sigma0(a)
+	mov	$a2,$a1
+	ror	\$`$sigma1[1]-$sigma1[0]`,$a2
 
 	xor	$T1,$a0
 	shr	\$$sigma0[2],$T1
 	ror	\$$sigma0[0],$a0
-	xor	$a2,$a1
-	shr	\$$sigma1[2],$a2
+	xor	$a1,$a2
+	shr	\$$sigma1[2],$a1
 
+	ror	\$$sigma1[0],$a2
 	xor	$a0,$T1			# sigma0(X[(i+1)&0xf])
-	ror	\$$sigma1[0],$a1
+	xor	$a1,$a2			# sigma1(X[(i+14)&0xf])
 	add	`$SZ*(($i+9)&0xf)`(%rsp),$T1
-	xor	$a2,$a1			# sigma1(X[(i+14)&0xf])
 
 	add	`$SZ*($i&0xf)`(%rsp),$T1
 	mov	$e,$a0
-	add	$a1,$T1
+	add	$a2,$T1
 	mov	$a,$a1
 ___
 	&ROUND_00_15(@_);
@@ -254,6 +265,10 @@ $code.=<<___ if ($SZ==4 || $avx);
 	mov	0(%r11),%r9d
 	mov	4(%r11),%r10d
 	mov	8(%r11),%r11d
+___
+$code.=<<___ if ($SZ==4 && $shaext);
+	test	\$`1<<29`,%r11d		# check for SHA
+	jnz	_shaext_shortcut
 ___
 $code.=<<___ if ($avx && $SZ==8);
 	test	\$`1<<11`,%r10d		# check for XOP
@@ -332,6 +347,7 @@ $code.=<<___;
 	jnz	.Lrounds_16_xx
 
 	mov	$_ctx,$ctx
+	add	$a1,$A			# modulo-scheduled h+=Sigma0(a)
 	lea	16*$SZ($inp),$inp
 
 	add	$SZ*0($ctx),$A
@@ -509,6 +525,166 @@ ___
 ######################################################################
 # SIMD code paths
 #
+if ($SZ==4 && $shaext) {{{
+######################################################################
+# Intel SHA Extensions implementation of SHA256 update function.
+#
+my ($ctx,$inp,$num,$Tbl)=("%rdi","%rsi","%rdx","%rcx");
+
+my ($Wi,$ABEF,$CDGH,$TMP,$BSWAP,$ABEF_SAVE,$CDGH_SAVE)=map("%xmm$_",(0..2,7..10));
+my @MSG=map("%xmm$_",(3..6));
+
+$code.=<<___;
+.type	sha256_block_data_order_shaext,\@function,3
+.align	64
+sha256_block_data_order_shaext:
+_shaext_shortcut:
+___
+$code.=<<___ if ($win64);
+	lea	`-8-5*16`(%rsp),%rsp
+	movaps	%xmm6,-8-5*16(%rax)
+	movaps	%xmm7,-8-4*16(%rax)
+	movaps	%xmm8,-8-3*16(%rax)
+	movaps	%xmm9,-8-2*16(%rax)
+	movaps	%xmm10,-8-1*16(%rax)
+.Lprologue_shaext:
+___
+$code.=<<___;
+	lea		K256+0x80(%rip),$Tbl
+	movdqu		($ctx),$ABEF		# DCBA
+	movdqu		16($ctx),$CDGH		# HGFE
+	movdqa		0x200-0x80($Tbl),$TMP	# byte swap mask
+
+	pshufd		\$0x1b,$ABEF,$Wi	# ABCD
+	pshufd		\$0xb1,$ABEF,$ABEF	# CDAB
+	pshufd		\$0x1b,$CDGH,$CDGH	# EFGH
+	movdqa		$TMP,$BSWAP		# offload
+	palignr		\$8,$CDGH,$ABEF		# ABEF
+	punpcklqdq	$Wi,$CDGH		# CDGH
+	jmp		.Loop_shaext
+
+.align	16
+.Loop_shaext:
+	movdqu		($inp),@MSG[0]
+	movdqu		0x10($inp),@MSG[1]
+	movdqu		0x20($inp),@MSG[2]
+	pshufb		$TMP,@MSG[0]
+	movdqu		0x30($inp),@MSG[3]
+
+	movdqa		0*32-0x80($Tbl),$Wi
+	paddd		@MSG[0],$Wi
+	pshufb		$TMP,@MSG[1]
+	movdqa		$CDGH,$CDGH_SAVE	# offload
+	sha256rnds2	$ABEF,$CDGH		# 0-3
+	pshufd		\$0x0e,$Wi,$Wi
+	nop
+	movdqa		$ABEF,$ABEF_SAVE	# offload
+	sha256rnds2	$CDGH,$ABEF
+
+	movdqa		1*32-0x80($Tbl),$Wi
+	paddd		@MSG[1],$Wi
+	pshufb		$TMP,@MSG[2]
+	sha256rnds2	$ABEF,$CDGH		# 4-7
+	pshufd		\$0x0e,$Wi,$Wi
+	lea		0x40($inp),$inp
+	sha256msg1	@MSG[1],@MSG[0]
+	sha256rnds2	$CDGH,$ABEF
+
+	movdqa		2*32-0x80($Tbl),$Wi
+	paddd		@MSG[2],$Wi
+	pshufb		$TMP,@MSG[3]
+	sha256rnds2	$ABEF,$CDGH		# 8-11
+	pshufd		\$0x0e,$Wi,$Wi
+	movdqa		@MSG[3],$TMP
+	palignr		\$4,@MSG[2],$TMP
+	nop
+	paddd		$TMP,@MSG[0]
+	sha256msg1	@MSG[2],@MSG[1]
+	sha256rnds2	$CDGH,$ABEF
+
+	movdqa		3*32-0x80($Tbl),$Wi
+	paddd		@MSG[3],$Wi
+	sha256msg2	@MSG[3],@MSG[0]
+	sha256rnds2	$ABEF,$CDGH		# 12-15
+	pshufd		\$0x0e,$Wi,$Wi
+	movdqa		@MSG[0],$TMP
+	palignr		\$4,@MSG[3],$TMP
+	nop
+	paddd		$TMP,@MSG[1]
+	sha256msg1	@MSG[3],@MSG[2]
+	sha256rnds2	$CDGH,$ABEF
+___
+for($i=4;$i<16-3;$i++) {
+$code.=<<___;
+	movdqa		$i*32-0x80($Tbl),$Wi
+	paddd		@MSG[0],$Wi
+	sha256msg2	@MSG[0],@MSG[1]
+	sha256rnds2	$ABEF,$CDGH		# 16-19...
+	pshufd		\$0x0e,$Wi,$Wi
+	movdqa		@MSG[1],$TMP
+	palignr		\$4,@MSG[0],$TMP
+	nop
+	paddd		$TMP,@MSG[2]
+	sha256msg1	@MSG[0],@MSG[3]
+	sha256rnds2	$CDGH,$ABEF
+___
+	push(@MSG,shift(@MSG));
+}
+$code.=<<___;
+	movdqa		13*32-0x80($Tbl),$Wi
+	paddd		@MSG[0],$Wi
+	sha256msg2	@MSG[0],@MSG[1]
+	sha256rnds2	$ABEF,$CDGH		# 52-55
+	pshufd		\$0x0e,$Wi,$Wi
+	movdqa		@MSG[1],$TMP
+	palignr		\$4,@MSG[0],$TMP
+	sha256rnds2	$CDGH,$ABEF
+	paddd		$TMP,@MSG[2]
+
+	movdqa		14*32-0x80($Tbl),$Wi
+	paddd		@MSG[1],$Wi
+	sha256rnds2	$ABEF,$CDGH		# 56-59
+	pshufd		\$0x0e,$Wi,$Wi
+	sha256msg2	@MSG[1],@MSG[2]
+	movdqa		$BSWAP,$TMP
+	sha256rnds2	$CDGH,$ABEF
+
+	movdqa		15*32-0x80($Tbl),$Wi
+	paddd		@MSG[2],$Wi
+	nop
+	sha256rnds2	$ABEF,$CDGH		# 60-63
+	pshufd		\$0x0e,$Wi,$Wi
+	dec		$num
+	nop
+	sha256rnds2	$CDGH,$ABEF
+
+	paddd		$CDGH_SAVE,$CDGH
+	paddd		$ABEF_SAVE,$ABEF
+	jnz		.Loop_shaext
+
+	pshufd		\$0xb1,$CDGH,$CDGH	# DCHG
+	pshufd		\$0x1b,$ABEF,$TMP	# FEBA
+	pshufd		\$0xb1,$ABEF,$ABEF	# BAFE
+	punpckhqdq	$CDGH,$ABEF		# DCBA
+	palignr		\$8,$TMP,$CDGH		# HGFE
+
+	movdqu	$ABEF,($ctx)
+	movdqu	$CDGH,16($ctx)
+___
+$code.=<<___ if ($win64);
+	movaps	-8-5*16(%rax),%xmm6
+	movaps	-8-4*16(%rax),%xmm7
+	movaps	-8-3*16(%rax),%xmm8
+	movaps	-8-2*16(%rax),%xmm9
+	movaps	-8-1*16(%rax),%xmm10
+	mov	%rax,%rsp
+.Lepilogue_shaext:
+___
+$code.=<<___;
+	ret
+.size	sha256_block_data_order_shaext,.-sha256_block_data_order_shaext
+___
+}}}
 {{{
 
 my $a4=$T1;
@@ -529,8 +705,8 @@ sub body_00_15 () {
 	'&mov	($a,$a1)',
 	'&mov	($a4,$f)',
 
-	'&xor	($a0,$e)',
 	'&ror	($a1,$Sigma0[2]-$Sigma0[1])',
+	'&xor	($a0,$e)',
 	'&xor	($a4,$g)',			# f^g
 
 	'&ror	($a0,$Sigma1[1]-$Sigma1[0])',
@@ -541,20 +717,20 @@ sub body_00_15 () {
 	'&add	($h,$SZ*($i&15)."(%rsp)")',	# h+=X[i]+K[i]
 	'&mov	($a2,$a)',
 
-	'&ror	($a1,$Sigma0[1]-$Sigma0[0])',
 	'&xor	($a4,$g)',			# Ch(e,f,g)=((f^g)&e)^g
+	'&ror	($a1,$Sigma0[1]-$Sigma0[0])',
 	'&xor	($a2,$b)',			# a^b, b^c in next round
 
-	'&ror	($a0,$Sigma1[0])',		# Sigma1(e)
 	'&add	($h,$a4)',			# h+=Ch(e,f,g)
+	'&ror	($a0,$Sigma1[0])',		# Sigma1(e)
 	'&and	($a3,$a2)',			# (b^c)&(a^b)
 
 	'&xor	($a1,$a)',
 	'&add	($h,$a0)',			# h+=Sigma1(e)
 	'&xor	($a3,$b)',			# Maj(a,b,c)=Ch(a^b,c,b)
 
-	'&add	($d,$h)',			# d+=h
 	'&ror	($a1,$Sigma0[0])',		# Sigma0(a)
+	'&add	($d,$h)',			# d+=h
 	'&add	($h,$a3)',			# h+=Maj(a,b,c)
 
 	'&mov	($a0,$d)',
@@ -611,8 +787,8 @@ $code.=<<___;
 ___
 
 $code.=<<___;
-	movdqa	$TABLE+`$SZ*2*$rounds`+32(%rip),$t4
-	movdqa	$TABLE+`$SZ*2*$rounds`+64(%rip),$t5
+	#movdqa	$TABLE+`$SZ*2*$rounds`+32(%rip),$t4
+	#movdqa	$TABLE+`$SZ*2*$rounds`+64(%rip),$t5
 	jmp	.Lloop_ssse3
 .align	16
 .Lloop_ssse3:
@@ -620,13 +796,13 @@ $code.=<<___;
 	movdqu	0x00($inp),@X[0]
 	movdqu	0x10($inp),@X[1]
 	movdqu	0x20($inp),@X[2]
-	movdqu	0x30($inp),@X[3]
 	pshufb	$t3,@X[0]
+	movdqu	0x30($inp),@X[3]
 	lea	$TABLE(%rip),$Tbl
 	pshufb	$t3,@X[1]
 	movdqa	0x00($Tbl),$t0
-	pshufb	$t3,@X[2]
 	movdqa	0x20($Tbl),$t1
+	pshufb	$t3,@X[2]
 	paddd	@X[0],$t0
 	movdqa	0x40($Tbl),$t2
 	pshufb	$t3,@X[3]
@@ -646,7 +822,7 @@ $code.=<<___;
 
 .align	16
 .Lssse3_00_47:
-	sub	\$-16*2*$SZ,$Tbl	# size optimization
+	sub	\$`-16*2*$SZ`,$Tbl	# size optimization
 ___
 sub Xupdate_256_SSSE3 () {
 	(
@@ -702,95 +878,98 @@ my @insns = (&$body,&$body,&$body,&$body);	# 104 instructions
 	    eval(shift(@insns));
 	    eval(shift(@insns));
 	}
-    } else {			# squeeze extra 3% on Westmere and Atom
+    } else {			# squeeze extra 4% on Westmere and 19% on Atom
 	  eval(shift(@insns));	#@
-	  eval(shift(@insns));
 	&movdqa		($t0,@X[1]);
 	  eval(shift(@insns));
+	  eval(shift(@insns));
 	&movdqa		($t3,@X[3]);
+	  eval(shift(@insns));	#@
+	  eval(shift(@insns));
 	  eval(shift(@insns));
 	  eval(shift(@insns));	#@
 	  eval(shift(@insns));
 	&palignr	($t0,@X[0],$SZ);	# X[1..4]
-	  eval(shift(@insns));	#@
+	  eval(shift(@insns));
 	  eval(shift(@insns));
 	 &palignr	($t3,@X[2],$SZ);	# X[9..12]
 	  eval(shift(@insns));
 	  eval(shift(@insns));
 	  eval(shift(@insns));
-	  eval(shift(@insns));
 	  eval(shift(@insns));	#@
-	  eval(shift(@insns));
 	&movdqa		($t1,$t0);
+	  eval(shift(@insns));
 	  eval(shift(@insns));
 	&movdqa		($t2,$t0);
 	  eval(shift(@insns));	#@
-	  eval(shift(@insns));
 	  eval(shift(@insns));
 	&psrld		($t0,$sigma0[2]);
 	  eval(shift(@insns));
 	  eval(shift(@insns));
 	  eval(shift(@insns));
 	 &paddd		(@X[0],$t3);		# X[0..3] += X[9..12]
-	  eval(shift(@insns));
 	  eval(shift(@insns));	#@
 	  eval(shift(@insns));
 	&psrld		($t2,$sigma0[0]);
 	  eval(shift(@insns));
 	  eval(shift(@insns));
-	  eval(shift(@insns));	#@
-	  eval(shift(@insns));
 	 &pshufd	($t3,@X[3],0b11111010);	# X[4..15]
 	  eval(shift(@insns));
+	  eval(shift(@insns));	#@
 	&pslld		($t1,8*$SZ-$sigma0[1]);
+	  eval(shift(@insns));
 	  eval(shift(@insns));
 	&pxor		($t0,$t2);
 	  eval(shift(@insns));	#@
 	  eval(shift(@insns));
-	&psrld		($t2,$sigma0[1]-$sigma0[0]);
+	  eval(shift(@insns));
 	  eval(shift(@insns));	#@
+	&psrld		($t2,$sigma0[1]-$sigma0[0]);
 	  eval(shift(@insns));
 	&pxor		($t0,$t1);
 	  eval(shift(@insns));
 	  eval(shift(@insns));
 	&pslld		($t1,$sigma0[1]-$sigma0[0]);
 	  eval(shift(@insns));
+	  eval(shift(@insns));
 	&pxor		($t0,$t2);
 	  eval(shift(@insns));
 	  eval(shift(@insns));	#@
-	  eval(shift(@insns));
 	 &movdqa	($t2,$t3);
 	  eval(shift(@insns));
-	  eval(shift(@insns));	#@
 	  eval(shift(@insns));
 	&pxor		($t0,$t1);		# sigma0(X[1..4])
+	  eval(shift(@insns));	#@
 	  eval(shift(@insns));
 	  eval(shift(@insns));
 	 &psrld		($t3,$sigma1[2]);
 	  eval(shift(@insns));
 	  eval(shift(@insns));
 	&paddd		(@X[0],$t0);		# X[0..3] += sigma0(X[1..4])
-	  eval(shift(@insns));
 	  eval(shift(@insns));	#@
-	  eval(shift(@insns));
 	  eval(shift(@insns));
 	 &psrlq		($t2,$sigma1[0]);
 	  eval(shift(@insns));
-	  eval(shift(@insns));	#@
 	  eval(shift(@insns));
 	  eval(shift(@insns));
 	 &pxor		($t3,$t2);
+	  eval(shift(@insns));	#@
+	  eval(shift(@insns));
 	  eval(shift(@insns));
 	  eval(shift(@insns));	#@
 	 &psrlq		($t2,$sigma1[1]-$sigma1[0]);
 	  eval(shift(@insns));
-	  eval(shift(@insns));	#@
 	  eval(shift(@insns));
 	 &pxor		($t3,$t2);
+	  eval(shift(@insns));	#@
+	  eval(shift(@insns));
+	  eval(shift(@insns));
+	 #&pshufb	($t3,$t4);		# sigma1(X[14..15])
+	 &pshufd	($t3,$t3,0b10000000);
 	  eval(shift(@insns));
 	  eval(shift(@insns));
 	  eval(shift(@insns));
-	 &pshufb	($t3,$t4);		# sigma1(X[14..15])
+	 &psrldq	($t3,8);
 	  eval(shift(@insns));
 	  eval(shift(@insns));	#@
 	  eval(shift(@insns));
@@ -798,45 +977,48 @@ my @insns = (&$body,&$body,&$body,&$body);	# 104 instructions
 	  eval(shift(@insns));	#@
 	&paddd		(@X[0],$t3);		# X[0..1] += sigma1(X[14..15])
 	  eval(shift(@insns));
+	  eval(shift(@insns));
+	  eval(shift(@insns));
 	 &pshufd	($t3,@X[0],0b01010000);	# X[16..17]
 	  eval(shift(@insns));
-	  eval(shift(@insns));
-	  eval(shift(@insns));
+	  eval(shift(@insns));	#@
 	  eval(shift(@insns));
 	 &movdqa	($t2,$t3);
 	  eval(shift(@insns));
-	  eval(shift(@insns));	#@
 	  eval(shift(@insns));
 	 &psrld		($t3,$sigma1[2]);
 	  eval(shift(@insns));
-	 &psrlq		($t2,$sigma1[0]);
-	  eval(shift(@insns));
 	  eval(shift(@insns));	#@
+	 &psrlq		($t2,$sigma1[0]);
 	  eval(shift(@insns));
 	  eval(shift(@insns));
 	 &pxor		($t3,$t2);
+	  eval(shift(@insns));	#@
+	  eval(shift(@insns));
 	  eval(shift(@insns));
 	  eval(shift(@insns));	#@
 	  eval(shift(@insns));
 	 &psrlq		($t2,$sigma1[1]-$sigma1[0]);
-	  eval(shift(@insns));	#@
 	  eval(shift(@insns));
 	  eval(shift(@insns));
 	  eval(shift(@insns));
 	 &pxor		($t3,$t2);
+	  eval(shift(@insns));
+	  eval(shift(@insns));
+	  eval(shift(@insns));	#@
+	 #&pshufb	($t3,$t5);
+	 &pshufd	($t3,$t3,0b00001000);
 	  eval(shift(@insns));
 	  eval(shift(@insns));
 	&movdqa		($t2,16*2*$j."($Tbl)");
 	  eval(shift(@insns));	#@
 	  eval(shift(@insns));
-	 &pshufb	($t3,$t5);
-	  eval(shift(@insns));
-	  eval(shift(@insns));	#@
+	 &pslldq	($t3,8);
 	  eval(shift(@insns));
 	  eval(shift(@insns));
 	  eval(shift(@insns));
 	&paddd		(@X[0],$t3);		# X[2..3] += sigma1(X[16..17])
-	  eval(shift(@insns));
+	  eval(shift(@insns));	#@
 	  eval(shift(@insns));
 	  eval(shift(@insns));
     }
@@ -942,7 +1124,7 @@ ___
 $code.=<<___;
 .Lprologue_xop:
 
-	vzeroall
+	vzeroupper
 	mov	$SZ*0($ctx),$A
 	mov	$SZ*1($ctx),$B
 	mov	$SZ*2($ctx),$C
@@ -986,7 +1168,7 @@ $code.=<<___;
 
 .align	16
 .Lxop_00_47:
-	sub	\$-16*2*$SZ,$Tbl	# size optimization
+	sub	\$`-16*2*$SZ`,$Tbl	# size optimization
 ___
 sub XOP_256_00_47 () {
 my $j = shift;
@@ -1148,7 +1330,7 @@ $code.=<<___;
 
 .align	16
 .Lxop_00_47:
-	add	\$16*2*$SZ,$Tbl
+	add	\$`16*2*$SZ`,$Tbl
 ___
 sub XOP_512_00_47 () {
 my $j = shift;
@@ -1254,7 +1436,7 @@ $code.=<<___;
 	jb	.Lloop_xop
 
 	mov	$_rsp,%rsi
-	vzeroall
+	vzeroupper
 ___
 $code.=<<___ if ($win64);
 	movaps	16*$SZ+32(%rsp),%xmm6
@@ -1318,7 +1500,7 @@ ___
 $code.=<<___;
 .Lprologue_avx:
 
-	vzeroall
+	vzeroupper
 	mov	$SZ*0($ctx),$A
 	mov	$SZ*1($ctx),$B
 	mov	$SZ*2($ctx),$C
@@ -1364,7 +1546,7 @@ $code.=<<___;
 
 .align	16
 .Lavx_00_47:
-	sub	\$-16*2*$SZ,$Tbl	# size optimization
+	sub	\$`-16*2*$SZ`,$Tbl	# size optimization
 ___
 sub Xupdate_256_AVX () {
 	(
@@ -1478,7 +1660,7 @@ $code.=<<___;
 
 .align	16
 .Lavx_00_47:
-	add	\$16*2*$SZ,$Tbl
+	add	\$`16*2*$SZ`,$Tbl
 ___
 sub Xupdate_512_AVX () {
 	(
@@ -1562,7 +1744,7 @@ $code.=<<___;
 	jb	.Lloop_avx
 
 	mov	$_rsp,%rsi
-	vzeroall
+	vzeroupper
 ___
 $code.=<<___ if ($win64);
 	movaps	16*$SZ+32(%rsp),%xmm6
@@ -1670,14 +1852,14 @@ ___
 $code.=<<___;
 .Lprologue_avx2:
 
-	vzeroall
+	vzeroupper
 	sub	\$-16*$SZ,$inp		# inp++, size optimization
 	mov	$SZ*0($ctx),$A
-	xor	%r12,%r12		# borrow $T1
+	mov	$inp,%r12		# borrow $T1
 	mov	$SZ*1($ctx),$B
 	cmp	%rdx,$inp		# $_end
 	mov	$SZ*2($ctx),$C
-	sete	%r12b
+	cmove	%rsp,%r12		# next block or random data
 	mov	$SZ*3($ctx),$D
 	mov	$SZ*4($ctx),$E
 	mov	$SZ*5($ctx),$F
@@ -1694,24 +1876,20 @@ $code.=<<___;
 	jmp	.Loop_avx2
 .align	16
 .Loop_avx2:
-	shl	\$`log(16*$SZ)/log(2)`,%r12
 	vmovdqa	$TABLE+`$SZ*2*$rounds`(%rip),$t3
-	neg	%r12	
-	vmovdqu	-16*$SZ+0($inp),$t0
-	add	$inp,%r12
-	vmovdqu	-16*$SZ+32($inp),$t1
-	vmovdqu	(%r12),@X[2]		# next or same input block
-	vmovdqu	32(%r12),@X[3]
-
-	vperm2i128	\$0x20,@X[2],$t0,@X[0]
+	vmovdqu	-16*$SZ+0($inp),%xmm0
+	vmovdqu	-16*$SZ+16($inp),%xmm1
+	vmovdqu	-16*$SZ+32($inp),%xmm2
+	vmovdqu	-16*$SZ+48($inp),%xmm3
 	#mov		$inp,$_inp	# offload $inp
-	vperm2i128	\$0x31,@X[2],$t0,@X[1]
-	vperm2i128	\$0x20,@X[3],$t1,@X[2]
-	vperm2i128	\$0x31,@X[3],$t1,@X[3]
+	vinserti128	\$1,(%r12),@X[0],@X[0]
+	vinserti128	\$1,16(%r12),@X[1],@X[1]
+	vpshufb		$t3,@X[0],@X[0]
+	vinserti128	\$1,32(%r12),@X[2],@X[2]
+	vpshufb		$t3,@X[1],@X[1]
+	vinserti128	\$1,48(%r12),@X[3],@X[3]
 
 	lea	$TABLE(%rip),$Tbl
-	vpshufb	$t3,@X[0],@X[0]
-	vpshufb	$t3,@X[1],@X[1]
 	vpshufb	$t3,@X[2],@X[2]
 	vpaddd	0x00($Tbl),@X[0],$t0
 	vpshufb	$t3,@X[3],@X[3]
@@ -1773,36 +1951,32 @@ $code.=<<___;
 	jmp	.Loop_avx2
 .align	16
 .Loop_avx2:
-	shl	\$`log(16*$SZ)/log(2)`,%r12
-	vmovdqu	-16*$SZ($inp),$t0
-	neg	%r12
-	vmovdqu	-16*$SZ+32($inp),$t1
-	add	$inp,%r12
-	vmovdqu	-16*$SZ+64($inp),$t2
-	vmovdqu	-16*$SZ+96($inp),$t3
-	vmovdqu	(%r12),@X[4]		# next or same block
-	vmovdqu	32(%r12),@X[5]
-	vmovdqu	64(%r12),@X[6]
-	vmovdqu	96(%r12),@X[7]
-
-	vperm2i128	\$0x20,@X[4],$t0,@X[0]
-	#mov		$inp,$_inp	# offload $inp
-	vperm2i128	\$0x31,@X[4],$t0,@X[1]
-	vperm2i128	\$0x20,@X[5],$t1,@X[2]
-	vperm2i128	\$0x31,@X[5],$t1,@X[3]
-	vperm2i128	\$0x20,@X[6],$t2,@X[4]
-	vperm2i128	\$0x31,@X[6],$t2,@X[5]
-	vmovdqa		$TABLE+`$SZ*2*$rounds`(%rip),$t2
-	vperm2i128	\$0x20,@X[7],$t3,@X[6]
-	vperm2i128	\$0x31,@X[7],$t3,@X[7]
-
-	vpshufb	$t2,@X[0],@X[0]
+	vmovdqu	-16*$SZ($inp),%xmm0
+	vmovdqu	-16*$SZ+16($inp),%xmm1
+	vmovdqu	-16*$SZ+32($inp),%xmm2
 	lea	$TABLE+0x80(%rip),$Tbl	# size optimization
-	vpshufb	$t2,@X[1],@X[1]
-	vpshufb	$t2,@X[2],@X[2]
-	vpshufb	$t2,@X[3],@X[3]
-	vpshufb	$t2,@X[4],@X[4]
-	vpshufb	$t2,@X[5],@X[5]
+	vmovdqu	-16*$SZ+48($inp),%xmm3
+	vmovdqu	-16*$SZ+64($inp),%xmm4
+	vmovdqu	-16*$SZ+80($inp),%xmm5
+	vmovdqu	-16*$SZ+96($inp),%xmm6
+	vmovdqu	-16*$SZ+112($inp),%xmm7
+	#mov	$inp,$_inp	# offload $inp
+	vmovdqa	`$SZ*2*$rounds-0x80`($Tbl),$t2
+	vinserti128	\$1,(%r12),@X[0],@X[0]
+	vinserti128	\$1,16(%r12),@X[1],@X[1]
+	 vpshufb	$t2,@X[0],@X[0]
+	vinserti128	\$1,32(%r12),@X[2],@X[2]
+	 vpshufb	$t2,@X[1],@X[1]
+	vinserti128	\$1,48(%r12),@X[3],@X[3]
+	 vpshufb	$t2,@X[2],@X[2]
+	vinserti128	\$1,64(%r12),@X[4],@X[4]
+	 vpshufb	$t2,@X[3],@X[3]
+	vinserti128	\$1,80(%r12),@X[5],@X[5]
+	 vpshufb	$t2,@X[4],@X[4]
+	vinserti128	\$1,96(%r12),@X[6],@X[6]
+	 vpshufb	$t2,@X[5],@X[5]
+	vinserti128	\$1,112(%r12),@X[7],@X[7]
+
 	vpaddq	-0x80($Tbl),@X[0],$t0
 	vpshufb	$t2,@X[6],@X[6]
 	vpaddq	-0x60($Tbl),@X[1],$t1
@@ -1924,11 +2098,12 @@ $code.=<<___;
 	add	$SZ*5($ctx),$F
 	lea	`2*16*$SZ`($inp),$inp	# inp+=2
 	add	$SZ*6($ctx),$G
-	xor	%r12,%r12
+	mov	$inp,%r12
 	add	$SZ*7($ctx),$H
 	cmp	$_end,$inp
 
 	mov	$A,$SZ*0($ctx)
+	cmove	%rsp,%r12		# next block or stale data
 	mov	$B,$SZ*1($ctx)
 	mov	$C,$SZ*2($ctx)
 	mov	$D,$SZ*3($ctx)
@@ -1937,14 +2112,13 @@ $code.=<<___;
 	mov	$G,$SZ*6($ctx)
 	mov	$H,$SZ*7($ctx)
 
-	sete	%r12b
 	jbe	.Loop_avx2
 	lea	(%rsp),$Tbl
 
 .Ldone_avx2:
 	lea	($Tbl),%rsp
 	mov	$_rsp,%rsi
-	vzeroall
+	vzeroupper
 ___
 $code.=<<___ if ($win64);
 	movaps	16*$SZ+32(%rsp),%xmm6
@@ -2088,12 +2262,54 @@ $code.=<<___;
 	pop	%rsi
 	ret
 .size	se_handler,.-se_handler
+___
 
+$code.=<<___ if ($SZ==4 && $shaext);
+.type	shaext_handler,\@abi-omnipotent
+.align	16
+shaext_handler:
+	push	%rsi
+	push	%rdi
+	push	%rbx
+	push	%rbp
+	push	%r12
+	push	%r13
+	push	%r14
+	push	%r15
+	pushfq
+	sub	\$64,%rsp
+
+	mov	120($context),%rax	# pull context->Rax
+	mov	248($context),%rbx	# pull context->Rip
+
+	lea	.Lprologue_shaext(%rip),%r10
+	cmp	%r10,%rbx		# context->Rip<.Lprologue
+	jb	.Lin_prologue
+
+	lea	.Lepilogue_shaext(%rip),%r10
+	cmp	%r10,%rbx		# context->Rip>=.Lepilogue
+	jae	.Lin_prologue
+
+	lea	-8-5*16(%rax),%rsi
+	lea	512($context),%rdi	# &context.Xmm6
+	mov	\$10,%ecx
+	.long	0xa548f3fc		# cld; rep movsq
+
+	jmp	.Lin_prologue
+.size	shaext_handler,.-shaext_handler
+___
+
+$code.=<<___;
 .section	.pdata
 .align	4
 	.rva	.LSEH_begin_$func
 	.rva	.LSEH_end_$func
 	.rva	.LSEH_info_$func
+___
+$code.=<<___ if ($SZ==4 && $shaext);
+	.rva	.LSEH_begin_${func}_shaext
+	.rva	.LSEH_end_${func}_shaext
+	.rva	.LSEH_info_${func}_shaext
 ___
 $code.=<<___ if ($SZ==4);
 	.rva	.LSEH_begin_${func}_ssse3
@@ -2123,6 +2339,11 @@ $code.=<<___;
 	.rva	se_handler
 	.rva	.Lprologue,.Lepilogue			# HandlerData[]
 ___
+$code.=<<___ if ($SZ==4 && $shaext);
+.LSEH_info_${func}_shaext:
+	.byte	9,0,0,0
+	.rva	shaext_handler
+___
 $code.=<<___ if ($SZ==4);
 .LSEH_info_${func}_ssse3:
 	.byte	9,0,0,0
@@ -2149,6 +2370,28 @@ $code.=<<___ if ($avx>1);
 ___
 }
 
-$code =~ s/\`([^\`]*)\`/eval $1/gem;
-print $code;
+sub sha256op38 {
+    my $instr = shift;
+    my %opcodelet = (
+		"sha256rnds2" => 0xcb,
+  		"sha256msg1"  => 0xcc,
+		"sha256msg2"  => 0xcd	);
+
+    if (defined($opcodelet{$instr}) && @_[0] =~ /%xmm([0-7]),\s*%xmm([0-7])/) {
+      my @opcode=(0x0f,0x38);
+	push @opcode,$opcodelet{$instr};
+	push @opcode,0xc0|($1&7)|(($2&7)<<3);		# ModR/M
+	return ".byte\t".join(',',@opcode);
+    } else {
+	return $instr."\t".@_[0];
+    }
+}
+
+foreach (split("\n",$code)) {
+	s/\`([^\`]*)\`/eval $1/geo;
+
+	s/\b(sha256[^\s]*)\s+(.*)/sha256op38($1,$2)/geo;
+
+	print $_,"\n";
+}
 close STDOUT;

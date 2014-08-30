@@ -72,7 +72,7 @@ static int dtls1_handshake_write(SSL *s);
 const char dtls1_version_str[]="DTLSv1" OPENSSL_VERSION_PTEXT;
 int dtls1_listen(SSL *s, struct sockaddr *client);
 
-SSL3_ENC_METHOD DTLSv1_enc_data={
+const SSL3_ENC_METHOD DTLSv1_enc_data={
     	tls1_enc,
 	tls1_mac,
 	tls1_setup_key_block,
@@ -91,7 +91,7 @@ SSL3_ENC_METHOD DTLSv1_enc_data={
 	dtls1_handshake_write	
 	};
 
-SSL3_ENC_METHOD DTLSv1_2_enc_data={
+const SSL3_ENC_METHOD DTLSv1_2_enc_data={
     	tls1_enc,
 	tls1_mac,
 	tls1_setup_key_block,
@@ -202,9 +202,12 @@ static void dtls1_clear_queues(SSL *s)
 
 	while ( (item = pqueue_pop(s->d1->buffered_app_data.q)) != NULL)
 		{
-		frag = (hm_fragment *)item->data;
-		OPENSSL_free(frag->fragment);
-		OPENSSL_free(frag);
+		rdata = (DTLS1_RECORD_DATA *) item->data;
+		if (rdata->rbuf.buf)
+			{
+			OPENSSL_free(rdata->rbuf.buf);
+			}
+		OPENSSL_free(item->data);
 		pitem_free(item);
 		}
 	}
@@ -487,7 +490,11 @@ static void get_current_time(struct timeval *t)
 
 	GetSystemTime(&st);
 	SystemTimeToFileTime(&st,&now.ft);
+#ifdef	__MINGW32__
+	now.ul -= 116444736000000000ULL;
+#else
 	now.ul -= 116444736000000000UI64;	/* re-bias to 1/1/1970 */
+#endif
 	t->tv_sec  = (long)(now.ul/10000000);
 	t->tv_usec = ((int)(now.ul%10000000))/10;
 #elif defined(OPENSSL_SYS_VMS)

@@ -148,7 +148,14 @@ typedef fd_mask fd_set;
 #define PORT_STR        "4433"
 #define PROTOCOL        "tcp"
 
-int do_server(int port, int type, int *ret, int (*cb) (char *hostname, int s, int stype, unsigned char *context), unsigned char *context, int naccept);
+int do_server(int port, int type, int *ret,
+	      int (*cb)(char *hostname, int s, int stype, unsigned char *context),
+	      unsigned char *context, int naccept);
+#ifndef NO_SYS_UN_H
+int do_server_unix(const char *path, int *ret,
+		   int (*cb)(char *hostname, int s, int stype, unsigned char *context),
+		   unsigned char *context, int naccept);
+#endif
 #ifdef HEADER_X509_H
 int MS_CALLBACK verify_callback(int ok, X509_STORE_CTX *ctx);
 #endif
@@ -156,18 +163,17 @@ int MS_CALLBACK verify_callback(int ok, X509_STORE_CTX *ctx);
 int set_cert_stuff(SSL_CTX *ctx, char *cert_file, char *key_file);
 int set_cert_key_stuff(SSL_CTX *ctx, X509 *cert, EVP_PKEY *key,
 					STACK_OF(X509) *chain, int build_chain);
-# ifndef OPENSSL_NO_TLSEXT
-int set_cert_key_and_authz(SSL_CTX *ctx, X509 *cert, EVP_PKEY *key,
-                           unsigned char *authz, size_t authz_length);
-# endif
 int ssl_print_sigalgs(BIO *out, SSL *s);
 int ssl_print_point_formats(BIO *out, SSL *s);
 int ssl_print_curves(BIO *out, SSL *s, int noshared);
 #endif
 int ssl_print_tmp_key(BIO *out, SSL *s);
-int init_client(int *sock, char *server, int port, int type);
+int init_client(int *sock, const char *server, int port, int type);
+#ifndef NO_SYS_UN_H
+int init_client_unix(int *sock, const char *server);
+#endif
 int should_retry(int i);
-int extract_port(char *str, short *port_ptr);
+int extract_port(const char *str, short *port_ptr);
 int extract_host_port(char *str,char **host_ptr,unsigned char *ip,short *p);
 
 long MS_CALLBACK bio_dump_callback(BIO *bio, int cmd, const char *argp,
@@ -202,4 +208,5 @@ int ssl_load_stores(SSL_CTX *ctx,
 			const char *vfyCApath, const char *vfyCAfile,
 			const char *chCApath, const char *chCAfile,
 			STACK_OF(X509_CRL) *crls, int crl_download);
+void ssl_ctx_security_debug(SSL_CTX *ctx, BIO *out, int verbose);
 #endif

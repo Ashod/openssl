@@ -148,7 +148,7 @@
 static const char *ca_usage[]={
 "usage: ca args\n",
 "\n",
-" -verbose        - Talk alot while doing things\n",
+" -verbose        - Talk a lot while doing things\n",
 " -config file    - A config file\n",
 " -name arg       - The particular CA definition to use\n",
 " -gencrl         - Generate a new CRL\n",
@@ -179,7 +179,7 @@ static const char *ca_usage[]={
 " -utf8           - input characters are UTF8 (default ASCII)\n",
 " -multivalue-rdn - enable support for multivalued RDNs\n",
 " -extensions ..  - Extension section (override value in config file)\n",
-" -extfile file   - Configuration file with X509v3 extentions to add\n",
+" -extfile file   - Configuration file with X509v3 extensions to add\n",
 " -crlexts ..     - CRL extension section (override value in config file)\n",
 #ifndef OPENSSL_NO_ENGINE
 " -engine e       - use engine e, possibly a hardware device.\n",
@@ -994,7 +994,7 @@ bad:
 	  	}
 
  	/*****************************************************************/
-	/* Read extentions config file                                   */
+	/* Read extensions config file                                   */
 	if (extfile)
 		{
 		extconf = NCONF_new(NULL);
@@ -1628,12 +1628,14 @@ static int certify(X509 **xret, char *infile, EVP_PKEY *pkey, X509 *x509,
 		{
 		ok=0;
 		BIO_printf(bio_err,"Signature verification problems....\n");
+		ERR_print_errors(bio_err);
 		goto err;
 		}
 	if (i == 0)
 		{
 		ok=0;
 		BIO_printf(bio_err,"Signature did not match the certificate request\n");
+		ERR_print_errors(bio_err);
 		goto err;
 		}
 	else
@@ -2799,6 +2801,9 @@ char *make_revocation_str(int rev_type, char *rev_arg)
 		}
 
 	revtm = X509_gmtime_adj(NULL, 0);
+
+	if (!revtm)
+		return NULL;
 
 	i = revtm->length + 1;
 
