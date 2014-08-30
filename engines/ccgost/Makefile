@@ -45,7 +45,7 @@ install:
 		set -e; \
 		echo installing $(LIBNAME); \
 		pfx=lib; \
-		if [ "$(PLATFORM)" != "Cygwin" ]; then \
+		if ! expr "$(PLATFORM)" : "Cygwin" >/dev/null; then \
 			case "$(CFLAGS)" in \
 			*DSO_BEOS*) sfx=".so";; \
 			*DSO_DLFCN*) sfx=`expr "$(SHLIB_EXT)" : '.*\(\.[a-z][a-z]*\)' \| ".so"`;; \
@@ -74,8 +74,7 @@ depend:
 	fi
 
 files:
-
-
+	$(PERL) $(TOP)/util/files.pl Makefile >> $(TOP)/MINFO
 
 lint:
 	lint -DLINT $(INCLUDES) $(SRC)>fluff

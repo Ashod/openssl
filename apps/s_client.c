@@ -193,6 +193,7 @@ typedef unsigned int u_int;
 extern int verify_depth;
 extern int verify_error;
 extern int verify_return_error;
+extern int verify_quiet;
 
 #ifdef FIONBIO
 static int c_nbio=0;
@@ -202,7 +203,6 @@ static int c_debug=0;
 #ifndef OPENSSL_NO_TLSEXT
 static int c_tlsextdebug=0;
 static int c_status_req=0;
-static int c_proof_debug=0;
 #endif
 static int c_msg=0;
 static int c_showcerts=0;
@@ -214,12 +214,12 @@ static void sc_usage(void);
 static void print_stuff(BIO *berr,SSL *con,int full);
 #ifndef OPENSSL_NO_TLSEXT
 static int ocsp_resp_cb(SSL *s, void *arg);
-static int audit_proof_cb(SSL *s, void *arg);
 #endif
 static BIO *bio_c_out=NULL;
 static BIO *bio_c_msg=NULL;
 static int c_quiet=0;
 static int c_ign_eof=0;
+static int c_brief=0;
 
 #ifndef OPENSSL_NO_PSK
 /* Default PSK identity and key */
@@ -291,8 +291,12 @@ static void sc_usage(void)
 	BIO_printf(bio_err," -host host     - use -connect instead\n");
 	BIO_printf(bio_err," -port port     - use -connect instead\n");
 	BIO_printf(bio_err," -connect host:port - who to connect to (default is %s:%s)\n",SSL_HOST_NAME,PORT_STR);
+	BIO_printf(bio_err," -checkhost host - check peer certificate matches \"host\"\n");
+	BIO_printf(bio_err," -checkemail email - check peer certificate matches \"email\"\n");
+	BIO_printf(bio_err," -checkip ipaddr - check peer certificate matches \"ipaddr\"\n");
 
 	BIO_printf(bio_err," -verify arg   - turn on peer certificate verification\n");
+	BIO_printf(bio_err," -verify_return_error - return verification errors\n");
 	BIO_printf(bio_err," -cert arg     - certificate file to use, PEM format assumed\n");
 	BIO_printf(bio_err," -certform arg - certificate format (PEM or DER) PEM default\n");
 	BIO_printf(bio_err," -key arg      - Private key file to use, in cert file if\n");
@@ -303,6 +307,7 @@ static void sc_usage(void)
 	BIO_printf(bio_err," -CAfile arg   - PEM format file of CA's\n");
 	BIO_printf(bio_err," -reconnect    - Drop and re-make the connection with the same Session-ID\n");
 	BIO_printf(bio_err," -pause        - sleep(1) after each read(2) and write(2) system call\n");
+	BIO_printf(bio_err," -prexit       - print session information even on connection failure\n");
 	BIO_printf(bio_err," -showcerts    - show all certificates in the chain\n");
 	BIO_printf(bio_err," -debug        - extra output\n");
 #ifdef WATT32
@@ -360,11 +365,12 @@ static void sc_usage(void)
 	BIO_printf(bio_err," -tlsextdebug      - hex dump of all TLS extensions received\n");
 	BIO_printf(bio_err," -status           - request certificate status from server\n");
 	BIO_printf(bio_err," -no_ticket        - disable use of RFC4507bis session tickets\n");
-	BIO_printf(bio_err," -proof_debug      - request an audit proof and print its hex dump\n");
+	BIO_printf(bio_err," -serverinfo types - send empty ClientHello extensions (comma-separated numbers)\n");
+#endif
 # ifndef OPENSSL_NO_NEXTPROTONEG
 	BIO_printf(bio_err," -nextprotoneg arg - enable NPN extension, considering named protocols supported (comma-separated list)\n");
 # endif
-#endif
+	BIO_printf(bio_err," -alpn arg         - enable ALPN extension, considering named protocols supported (comma-separated list)\n");
 	BIO_printf(bio_err," -legacy_renegotiation - enable use of legacy renegotiation (dangerous)\n");
 	BIO_printf(bio_err," -use_srtp profiles - Offer SRTP key management with a colon-separated profile list\n");
  	BIO_printf(bio_err," -keymatexport label   - Export keying material using label\n");
@@ -541,6 +547,27 @@ static int next_proto_cb(SSL *s, unsigned char **out, unsigned char *outlen, con
 	return SSL_TLSEXT_ERR_OK;
 	}
 # endif  /* ndef OPENSSL_NO_NEXTPROTONEG */
+
+static int serverinfo_cli_parse_cb(SSL* s, unsigned int ext_type,
+				   const unsigned char* in, size_t inlen, 
+				   int* al, void* arg)
+	{
+	char pem_name[100];
+	unsigned char ext_buf[4 + 65536];
+
+	/* Reconstruct the type/len fields prior to extension data */
+	ext_buf[0] = ext_type >> 8;
+	ext_buf[1] = ext_type & 0xFF;
+	ext_buf[2] = inlen >> 8;
+	ext_buf[3] = inlen & 0xFF;
+	memcpy(ext_buf+4, in, inlen);
+
+	BIO_snprintf(pem_name, sizeof(pem_name), "SERVERINFO FOR EXTENSION %d",
+		     ext_type);
+	PEM_write_bio(bio_c_out, pem_name, "", ext_buf, 4 + inlen);
+	return 1;
+	}
+
 #endif
 
 enum
@@ -613,6 +640,10 @@ int MAIN(int argc, char **argv)
 # ifndef OPENSSL_NO_NEXTPROTONEG
 	const char *next_proto_neg_in = NULL;
 # endif
+	const char *alpn_in = NULL;
+# define MAX_SI_TYPES 100
+	unsigned short serverinfo_types[MAX_SI_TYPES];
+	int serverinfo_types_count = 0;
 #endif
 	char *sess_in = NULL;
 	char *sess_out = NULL;
@@ -703,7 +734,8 @@ static char *jpake_secret = NULL;
 			verify=SSL_VERIFY_PEER;
 			if (--argc < 1) goto bad;
 			verify_depth=atoi(*(++argv));
-			BIO_printf(bio_err,"verify depth is %d\n",verify_depth);
+			if (!c_quiet)
+				BIO_printf(bio_err,"verify depth is %d\n",verify_depth);
 			}
 		else if	(strcmp(*argv,"-cert") == 0)
 			{
@@ -745,6 +777,14 @@ static char *jpake_secret = NULL;
 			}
 		else if (strcmp(*argv,"-verify_return_error") == 0)
 			verify_return_error = 1;
+		else if (strcmp(*argv,"-verify_quiet") == 0)
+			verify_quiet = 1;
+		else if (strcmp(*argv,"-brief") == 0)
+			{
+			c_brief = 1;
+			verify_quiet = 1;
+			c_quiet = 1;
+			}
 		else if (args_excert(&argv, &argc, &badarg, bio_err, &exc))
 			{
 			if (badarg)
@@ -779,8 +819,6 @@ static char *jpake_secret = NULL;
 			c_tlsextdebug=1;
 		else if	(strcmp(*argv,"-status") == 0)
 			c_status_req=1;
-		else if	(strcmp(*argv,"-proof_debug") == 0)
-			c_proof_debug=1;
 #endif
 #ifdef WATT32
 		else if (strcmp(*argv,"-wdebug") == 0)
@@ -872,9 +910,19 @@ static char *jpake_secret = NULL;
 			meth=TLSv1_client_method();
 #endif
 #ifndef OPENSSL_NO_DTLS1
+		else if	(strcmp(*argv,"-dtls") == 0)
+			{
+			meth=DTLS_client_method();
+			socket_type=SOCK_DGRAM;
+			}
 		else if	(strcmp(*argv,"-dtls1") == 0)
 			{
 			meth=DTLSv1_client_method();
+			socket_type=SOCK_DGRAM;
+			}
+		else if	(strcmp(*argv,"-dtls1_2") == 0)
+			{
+			meth=DTLSv1_2_client_method();
 			socket_type=SOCK_DGRAM;
 			}
 		else if (strcmp(*argv,"-timeout") == 0)
@@ -949,6 +997,34 @@ static char *jpake_secret = NULL;
 			next_proto_neg_in = *(++argv);
 			}
 # endif
+		else if (strcmp(*argv,"-alpn") == 0)
+			{
+			if (--argc < 1) goto bad;
+			alpn_in = *(++argv);
+			}
+		else if (strcmp(*argv,"-serverinfo") == 0)
+			{
+			char *c;
+			int start = 0;
+			int len;
+
+			if (--argc < 1) goto bad;
+			c = *(++argv);
+			serverinfo_types_count = 0;
+			len = strlen(c);
+			for (i = 0; i <= len; ++i)
+				{
+				if (i == len || c[i] == ',')
+					{
+					serverinfo_types[serverinfo_types_count]
+					    = atoi(c+start);
+					serverinfo_types_count++;
+					start = i+1;
+					}
+				if (serverinfo_types_count == MAX_SI_TYPES)
+					break;
+				}
+			}
 #endif
 #ifdef FIONBIO
 		else if (strcmp(*argv,"-nbio") == 0)
@@ -1238,9 +1314,34 @@ bad:
 	 */
 	if (socket_type == SOCK_DGRAM) SSL_CTX_set_read_ahead(ctx, 1);
 
-#if !defined(OPENSSL_NO_TLSEXT) && !defined(OPENSSL_NO_NEXTPROTONEG)
+#if !defined(OPENSSL_NO_TLSEXT)
+# if !defined(OPENSSL_NO_NEXTPROTONEG)
 	if (next_proto.data)
 		SSL_CTX_set_next_proto_select_cb(ctx, next_proto_cb, &next_proto);
+# endif
+	if (alpn_in)
+		{
+		unsigned short alpn_len;
+		unsigned char *alpn = next_protos_parse(&alpn_len, alpn_in);
+
+		if (alpn == NULL)
+			{
+			BIO_printf(bio_err, "Error parsing -alpn argument\n");
+			goto end;
+			}
+		SSL_CTX_set_alpn_protos(ctx, alpn, alpn_len);
+		OPENSSL_free(alpn);
+		}
+#endif
+#ifndef OPENSSL_NO_TLSEXT
+		for (i = 0; i < serverinfo_types_count; i++)
+			{
+			SSL_CTX_add_client_custom_ext(ctx,
+						      serverinfo_types[i],
+						      NULL, NULL, NULL,
+						      serverinfo_cli_parse_cb,
+						      NULL);
+			}
 #endif
 
 	if (state) SSL_CTX_set_info_callback(ctx,apps_ssl_info_callback);
@@ -1288,9 +1389,6 @@ bad:
 		}
 
 #endif
-	if (c_proof_debug)
-		SSL_CTX_set_tlsext_authz_server_audit_proof_cb(ctx,
-							       audit_proof_cb);
 #endif
 
 	con=SSL_new(ctx);
@@ -1366,7 +1464,7 @@ re_start:
 #endif                                              
 	if (c_Pause & 0x01) SSL_set_debug(con, 1);
 
-	if ( SSL_version(con) == DTLS1_VERSION)
+	if (socket_type == SOCK_DGRAM)
 		{
 
 		sbio=BIO_new_dgram(s,BIO_NOCLOSE);
@@ -1625,6 +1723,13 @@ SSL_set_tlsext_status_ids(con, ids);
 					else 
 						BIO_printf(bio_err, "Error writing session file %s\n", sess_out);
 					}
+				if (c_brief)
+					{
+					BIO_puts(bio_err,
+						"CONNECTION ESTABLISHED\n");
+					print_ssl_summary(bio_err, con);
+					}
+
 				print_stuff(bio_c_out,con,full_log);
 				if (full_log > 0) full_log--;
 
@@ -1887,7 +1992,10 @@ printf("read=%d pending=%d peek=%d\n",k,SSL_pending(con),SSL_peek(con,zbuf,10240
 				break;
 			case SSL_ERROR_SYSCALL:
 				ret=get_last_socket_error();
-				BIO_printf(bio_err,"read:errno=%d\n",ret);
+				if (c_brief)
+					BIO_puts(bio_err, "CONNECTION CLOSED BY SERVER\n");
+				else
+					BIO_printf(bio_err,"read:errno=%d\n",ret);
 				goto shut;
 			case SSL_ERROR_ZERO_RETURN:
 				BIO_printf(bio_c_out,"closed\n");
@@ -2174,7 +2282,8 @@ static void print_stuff(BIO *bio, SSL *s, int full)
 	}
 #endif
 
-#if !defined(OPENSSL_NO_TLSEXT) && !defined(OPENSSL_NO_NEXTPROTONEG)
+#if !defined(OPENSSL_NO_TLSEXT)
+# if !defined(OPENSSL_NO_NEXTPROTONEG)
 	if (next_proto.status != -1) {
 		const unsigned char *proto;
 		unsigned int proto_len;
@@ -2182,6 +2291,20 @@ static void print_stuff(BIO *bio, SSL *s, int full)
 		BIO_printf(bio, "Next protocol: (%d) ", next_proto.status);
 		BIO_write(bio, proto, proto_len);
 		BIO_write(bio, "\n", 1);
+	}
+# endif
+	{
+		const unsigned char *proto;
+		unsigned int proto_len;
+		SSL_get0_alpn_selected(s, &proto, &proto_len);
+		if (proto_len > 0)
+			{
+			BIO_printf(bio, "ALPN protocol: ");
+			BIO_write(bio, proto, proto_len);
+			BIO_write(bio, "\n", 1);
+			}
+		else
+			BIO_printf(bio, "No ALPN negotiated\n");
 	}
 #endif
 
@@ -2256,26 +2379,4 @@ static int ocsp_resp_cb(SSL *s, void *arg)
 	return 1;
 	}
 
-static int audit_proof_cb(SSL *s, void *arg)
-	{
-	const unsigned char *proof;
-	size_t proof_len;
-	size_t i;
-	SSL_SESSION *sess = SSL_get_session(s);
-
-	proof = SSL_SESSION_get_tlsext_authz_server_audit_proof(sess,
-								&proof_len);
-	if (proof != NULL)
-		{
-		BIO_printf(bio_c_out, "Audit proof: ");
-		for (i = 0; i < proof_len; ++i)
-			BIO_printf(bio_c_out, "%02X", proof[i]);
-		BIO_printf(bio_c_out, "\n");
-		}
-	else
-		{
-		BIO_printf(bio_c_out, "No audit proof found.\n");
-		}
-	return 1;
-	}
 #endif

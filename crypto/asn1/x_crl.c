@@ -58,8 +58,8 @@
 
 #include <stdio.h>
 #include "cryptlib.h"
-#include "asn1_locl.h"
 #include <openssl/asn1t.h>
+#include "asn1_locl.h"
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
 
@@ -270,6 +270,7 @@ static int crl_cb(int operation, ASN1_VALUE **pval, const ASN1_ITEM *it,
 				{
 				/* We handle IDP and deltas */
 				if ((nid == NID_issuing_distribution_point)
+					|| (nid == NID_authority_key_identifier)
 					|| (nid == NID_delta_crl))
 					break;;
 				crl->flags |= EXFLAG_CRITICAL;

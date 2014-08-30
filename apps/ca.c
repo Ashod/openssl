@@ -1628,12 +1628,14 @@ static int certify(X509 **xret, char *infile, EVP_PKEY *pkey, X509 *x509,
 		{
 		ok=0;
 		BIO_printf(bio_err,"Signature verification problems....\n");
+		ERR_print_errors(bio_err);
 		goto err;
 		}
 	if (i == 0)
 		{
 		ok=0;
 		BIO_printf(bio_err,"Signature did not match the certificate request\n");
+		ERR_print_errors(bio_err);
 		goto err;
 		}
 	else
@@ -2052,7 +2054,13 @@ again2:
 
 	if (enddate == NULL)
 		X509_time_adj_ex(X509_get_notAfter(ret),days, 0, NULL);
-	else ASN1_TIME_set_string(X509_get_notAfter(ret),enddate);
+	else
+		{
+		int tdays;
+		ASN1_TIME_set_string(X509_get_notAfter(ret),enddate);
+		ASN1_TIME_diff(&tdays, NULL, NULL, X509_get_notAfter(ret));
+		days = tdays;
+		}
 
 	if (!X509_set_subject_name(ret,subject)) goto err;
 
@@ -2793,6 +2801,9 @@ char *make_revocation_str(int rev_type, char *rev_arg)
 		}
 
 	revtm = X509_gmtime_adj(NULL, 0);
+
+	if (!revtm)
+		return NULL;
 
 	i = revtm->length + 1;
 

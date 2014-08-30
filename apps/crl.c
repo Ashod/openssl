@@ -81,6 +81,9 @@ static const char *crl_usage[]={
 " -in arg         - input file - default stdin\n",
 " -out arg        - output file - default stdout\n",
 " -hash           - print hash value\n",
+#ifndef OPENSSL_NO_MD5
+" -hash_old       - print old-style (MD5) hash value\n",
+#endif
 " -fingerprint    - print the crl fingerprint\n",
 " -issuer         - print issuer DN\n",
 " -lastupdate     - lastUpdate field\n",
@@ -102,11 +105,14 @@ int MAIN(int argc, char **argv)
 	unsigned long nmflag = 0;
 	X509_CRL *x=NULL;
 	char *CAfile = NULL, *CApath = NULL;
-	int ret=1,i,num,badops=0;
+	int ret=1,i,num,badops=0,badsig=0;
 	BIO *out=NULL;
 	int informat,outformat, keyformat;
 	char *infile=NULL,*outfile=NULL, *crldiff = NULL, *keyfile = NULL;
 	int hash=0,issuer=0,lastupdate=0,nextupdate=0,noout=0,text=0;
+#ifndef OPENSSL_NO_MD5
+       int hash_old=0;
+#endif
 	int fingerprint = 0, crlnumber = 0;
 	const char **pp;
 	X509_STORE *store = NULL;
@@ -207,6 +213,10 @@ int MAIN(int argc, char **argv)
 			text = 1;
 		else if (strcmp(*argv,"-hash") == 0)
 			hash= ++num;
+#ifndef OPENSSL_NO_MD5
+		else if (strcmp(*argv,"-hash_old") == 0)
+			hash_old= ++num;
+#endif
 		else if (strcmp(*argv,"-nameopt") == 0)
 			{
 			if (--argc < 1) goto bad;
@@ -224,6 +234,8 @@ int MAIN(int argc, char **argv)
 			fingerprint= ++num;
 		else if (strcmp(*argv,"-crlnumber") == 0)
 			crlnumber= ++num;
+		else if (strcmp(*argv,"-badsig") == 0)
+			badsig = 1;
 		else if ((md_alg=EVP_get_digestbyname(*argv + 1)))
 			{
 			/* ok */
@@ -352,6 +364,14 @@ bad:
 				BIO_printf(bio_out,"%08lx\n",
 					X509_NAME_hash(X509_CRL_get_issuer(x)));
 				}
+#ifndef OPENSSL_NO_MD5
+			if (hash_old == i)
+				{
+				BIO_printf(bio_out,"%08lx\n",
+					X509_NAME_hash_old(
+						X509_CRL_get_issuer(x)));
+				}
+#endif
 			if (lastupdate == i)
 				{
 				BIO_printf(bio_out,"lastUpdate=");
@@ -425,6 +445,9 @@ bad:
 		ret = 0;
 		goto end;
 		}
+
+	if (badsig)
+		x->signature->data[x->signature->length - 1] ^= 0x1;
 
 	if 	(outformat == FORMAT_ASN1)
 		i=(int)i2d_X509_CRL_bio(out,x);

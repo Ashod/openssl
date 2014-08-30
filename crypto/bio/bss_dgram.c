@@ -66,7 +66,7 @@
 #include <openssl/bio.h>
 #ifndef OPENSSL_NO_DGRAM
 
-#if defined(OPENSSL_SYS_WIN32) || defined(OPENSSL_SYS_VMS)
+#if defined(OPENSSL_SYS_VMS)
 #include <sys/timeb.h>
 #endif
 
@@ -954,8 +954,8 @@ BIO *BIO_new_dgram_sctp(int fd, int close_flag)
 	memset(authchunks, 0, sizeof(sockopt_len));
 	ret = getsockopt(fd, IPPROTO_SCTP, SCTP_LOCAL_AUTH_CHUNKS, authchunks, &sockopt_len);
 	OPENSSL_assert(ret >= 0);
-	
-	for (p = (unsigned char*) authchunks + sizeof(sctp_assoc_t);
+
+	for (p = (unsigned char*) authchunks->gauth_chunks;
 	     p < (unsigned char*) authchunks + sockopt_len;
 	     p += sizeof(uint8_t))
 		{
@@ -1245,7 +1245,7 @@ static int dgram_sctp_read(BIO *b, char *out, int outl)
 			ii = getsockopt(b->num, IPPROTO_SCTP, SCTP_PEER_AUTH_CHUNKS, authchunks, &optlen);
 			OPENSSL_assert(ii >= 0);
 
-			for (p = (unsigned char*) authchunks + sizeof(sctp_assoc_t);
+			for (p = (unsigned char*) authchunks->gauth_chunks;
 				 p < (unsigned char*) authchunks + optlen;
 				 p += sizeof(uint8_t))
 				{
@@ -1381,7 +1381,7 @@ static long dgram_sctp_ctrl(BIO *b, int cmd, long num, void *ptr)
 	bio_dgram_sctp_data *data = NULL;
 	socklen_t sockopt_len = 0;
 	struct sctp_authkeyid authkeyid;
-	struct sctp_authkey *authkey;
+	struct sctp_authkey *authkey = NULL;
 
 	data = (bio_dgram_sctp_data *)b->ptr;
 
@@ -1436,6 +1436,11 @@ static long dgram_sctp_ctrl(BIO *b, int cmd, long num, void *ptr)
 		/* Add new key */
 		sockopt_len = sizeof(struct sctp_authkey) + 64 * sizeof(uint8_t);
 		authkey = OPENSSL_malloc(sockopt_len);
+		if (authkey == NULL)
+			{
+			ret = -1;
+			break;
+			}
 		memset(authkey, 0x00, sockopt_len);
 		authkey->sca_keynumber = authkeyid.scact_keynumber + 1;
 #ifndef __FreeBSD__
@@ -1447,6 +1452,8 @@ static long dgram_sctp_ctrl(BIO *b, int cmd, long num, void *ptr)
 		memcpy(&authkey->sca_key[0], ptr, 64 * sizeof(uint8_t));
 
 		ret = setsockopt(b->num, IPPROTO_SCTP, SCTP_AUTH_KEY, authkey, sockopt_len);
+		OPENSSL_free(authkey);
+		authkey = NULL;
 		if (ret < 0) break;
 
 		/* Reset active key */
@@ -1895,11 +1902,19 @@ int BIO_dgram_non_fatal_error(int err)
 
 static void get_current_time(struct timeval *t)
 	{
-#ifdef OPENSSL_SYS_WIN32
-	struct _timeb tb;
-	_ftime(&tb);
-	t->tv_sec = (long)tb.time;
-	t->tv_usec = (long)tb.millitm * 1000;
+#if defined(_WIN32)
+	SYSTEMTIME st;
+	union { unsigned __int64 ul; FILETIME ft; } now;
+
+	GetSystemTime(&st);
+	SystemTimeToFileTime(&st,&now.ft);
+#ifdef	__MINGW32__
+	now.ul -= 116444736000000000ULL;
+#else
+	now.ul -= 116444736000000000UI64;	/* re-bias to 1/1/1970 */
+#endif
+	t->tv_sec  = (long)(now.ul/10000000);
+	t->tv_usec = ((int)(now.ul%10000000))/10;
 #elif defined(OPENSSL_SYS_VMS)
 	struct timeb tb;
 	ftime(&tb);

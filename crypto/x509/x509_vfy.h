@@ -158,6 +158,8 @@ typedef struct x509_lookup_method_st
 			    X509_OBJECT *ret);
 	} X509_LOOKUP_METHOD;
 
+typedef struct X509_VERIFY_PARAM_ID_st X509_VERIFY_PARAM_ID;
+
 /* This structure hold all parameters associated with a verify operation
  * by including an X509_VERIFY_PARAM structure in related structures the
  * parameters used can be customized
@@ -173,12 +175,7 @@ typedef struct X509_VERIFY_PARAM_st
 	int trust;		/* trust setting to check */
 	int depth;		/* Verify depth */
 	STACK_OF(ASN1_OBJECT) *policies;	/* Permissible policies */
-	unsigned char *host;	/* If not NULL hostname to match */
-	size_t hostlen;
-	unsigned char *email;	/* If not NULL email address to match */
-	size_t emaillen;
-	unsigned char *ip;	/* If not NULL IP address to match */
-	size_t iplen;		/* Length of IP address */
+	X509_VERIFY_PARAM_ID *id;	/* opaque ID data */
 	} X509_VERIFY_PARAM;
 
 DECLARE_STACK_OF(X509_VERIFY_PARAM)
@@ -562,16 +559,24 @@ int X509_VERIFY_PARAM_set1_policies(X509_VERIFY_PARAM *param,
 					STACK_OF(ASN1_OBJECT) *policies);
 
 int X509_VERIFY_PARAM_set1_host(X509_VERIFY_PARAM *param,
-				const unsigned char *name, size_t namelen);
+				const char *name, size_t namelen);
+int X509_VERIFY_PARAM_add1_host(X509_VERIFY_PARAM *param,
+				const char *name, size_t namelen);
+void X509_VERIFY_PARAM_set_hostflags(X509_VERIFY_PARAM *param,
+					unsigned int flags);
+char *X509_VERIFY_PARAM_get0_peername(X509_VERIFY_PARAM *);
 int X509_VERIFY_PARAM_set1_email(X509_VERIFY_PARAM *param,
-				const unsigned char *email, size_t emaillen);
+				const char *email, size_t emaillen);
 int X509_VERIFY_PARAM_set1_ip(X509_VERIFY_PARAM *param,
 					const unsigned char *ip, size_t iplen);
 int X509_VERIFY_PARAM_set1_ip_asc(X509_VERIFY_PARAM *param, const char *ipasc);
 
 int X509_VERIFY_PARAM_get_depth(const X509_VERIFY_PARAM *param);
+const char *X509_VERIFY_PARAM_get0_name(const X509_VERIFY_PARAM *param);
 
 int X509_VERIFY_PARAM_add0_table(X509_VERIFY_PARAM *param);
+int X509_VERIFY_PARAM_get_count(void);
+const X509_VERIFY_PARAM *X509_VERIFY_PARAM_get0(int id);
 const X509_VERIFY_PARAM *X509_VERIFY_PARAM_lookup(const char *name);
 void X509_VERIFY_PARAM_table_cleanup(void);
 

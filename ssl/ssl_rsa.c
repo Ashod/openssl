@@ -66,10 +66,6 @@
 
 static int ssl_set_cert(CERT *c, X509 *x509);
 static int ssl_set_pkey(CERT *c, EVP_PKEY *pkey);
-#ifndef OPENSSL_NO_TLSEXT
-static int ssl_set_authz(CERT *c, unsigned char *authz,
-			 size_t authz_length);
-#endif
 int SSL_use_certificate(SSL *ssl, X509 *x)
 	{
 	if (x == NULL)
@@ -463,15 +459,6 @@ static int ssl_set_cert(CERT *c, X509 *x)
 		X509_free(c->pkeys[i].x509);
 	CRYPTO_add(&x->references,1,CRYPTO_LOCK_X509);
 	c->pkeys[i].x509=x;
-#ifndef OPENSSL_NO_TLSEXT
-	/* Free the old authz data, if it exists. */
-	if (c->pkeys[i].authz != NULL)
-		{
-		OPENSSL_free(c->pkeys[i].authz);
-		c->pkeys[i].authz = NULL;
-		c->pkeys[i].authz_length = 0;
-		}
-#endif
 	c->key= &(c->pkeys[i]);
 
 	c->valid=0;
@@ -771,19 +758,15 @@ int SSL_CTX_use_certificate_chain_file(SSL_CTX *ctx, const char *file)
 		X509 *ca;
 		int r;
 		unsigned long err;
-		
-		if (ctx->extra_certs != NULL)
-			{
-			sk_X509_pop_free(ctx->extra_certs, X509_free);
-			ctx->extra_certs = NULL;
-			}
 
+		SSL_CTX_clear_chain_certs(ctx);
+		
 		while ((ca = PEM_read_bio_X509(in, NULL,
 					ctx->default_passwd_callback,
 					ctx->default_passwd_callback_userdata))
 			!= NULL)
 			{
-			r = SSL_CTX_add_extra_chain_cert(ctx, ca);
+			r = SSL_CTX_add0_chain_cert(ctx, ca);
 			if (!r) 
 				{
 				X509_free(ca);
@@ -811,219 +794,271 @@ end:
 #endif
 
 #ifndef OPENSSL_NO_TLSEXT
-/* authz_validate returns true iff authz is well formed, i.e. that it meets the
- * wire format as documented in the CERT_PKEY structure and that there are no
- * duplicate entries. */
-static char authz_validate(const unsigned char *authz, size_t length)
+static int serverinfo_find_extension(const unsigned char *serverinfo,
+				     size_t serverinfo_length,
+				     unsigned int extension_type,
+				     const unsigned char **extension_data,
+				     size_t *extension_length)
 	{
-	unsigned char types_seen_bitmap[32];
-
-	if (!authz)
-		return 1;
-
-	memset(types_seen_bitmap, 0, sizeof(types_seen_bitmap));
-
-	for (;;)
-		{
-		unsigned char type, byte, bit;
-		unsigned short len;
-
-		if (!length)
-			return 1;
-
-		type = *(authz++);
-		length--;
-
-		byte = type / 8;
-		bit = type & 7;
-		if (types_seen_bitmap[byte] & (1 << bit))
-			return 0;
-		types_seen_bitmap[byte] |= (1 << bit);
-
-		if (length < 2)
-			return 0;
-		len = ((unsigned short) authz[0]) << 8 |
-		      ((unsigned short) authz[1]);
-		authz += 2;
-		length -= 2;
-
-		if (length < len)
-			return 0;
-
-		authz += len;
-		length -= len;
-		}
-	}
-
-static const unsigned char *authz_find_data(const unsigned char *authz,
-					    size_t authz_length,
-					    unsigned char data_type,
-					    size_t *data_length)
-	{
-	if (authz == NULL) return NULL;
-	if (!authz_validate(authz, authz_length))
-		{
-		SSLerr(SSL_F_AUTHZ_FIND_DATA,SSL_R_INVALID_AUTHZ_DATA);
-		return NULL;
-		}
-
-	for (;;)
-		{
-		unsigned char type;
-		unsigned short len;
-		if (!authz_length)
-			return NULL;
-
-		type = *(authz++);
-		authz_length--;
-
-		/* We've validated the authz data, so we don't have to
-		 * check again that we have enough bytes left. */
-		len = ((unsigned short) authz[0]) << 8 |
-		      ((unsigned short) authz[1]);
-		authz += 2;
-		authz_length -= 2;
-		if (type == data_type)
-			{
-			*data_length = len;
-			return authz;
-			}
-		authz += len;
-		authz_length -= len;
-		}
-	/* No match */
-	return NULL;
-	}
-
-static int ssl_set_authz(CERT *c, unsigned char *authz, size_t authz_length)
-	{
-	CERT_PKEY *current_key = c->key;
-	if (current_key == NULL)
+	*extension_data = NULL;
+	*extension_length = 0;
+	if (serverinfo == NULL || serverinfo_length == 0)
 		return 0;
-	if (!authz_validate(authz, authz_length))
+	for (;;)
 		{
-		SSLerr(SSL_F_SSL_SET_AUTHZ,SSL_R_INVALID_AUTHZ_DATA);
-		return(0);
+		unsigned int type = 0;
+		size_t len = 0;
+
+		/* end of serverinfo */
+		if (serverinfo_length == 0)
+			return -1; /* Extension not found */
+
+		/* read 2-byte type field */
+		if (serverinfo_length < 2)
+			return 0; /* Error */
+		type = (serverinfo[0] << 8) + serverinfo[1];
+		serverinfo += 2;
+		serverinfo_length -= 2;
+
+		/* read 2-byte len field */
+		if (serverinfo_length < 2)
+			return 0; /* Error */
+		len = (serverinfo[0] << 8) + serverinfo[1];
+		serverinfo += 2;
+		serverinfo_length -= 2;
+
+		if (len > serverinfo_length)
+			return 0; /* Error */
+
+		if (type == extension_type)
+			{
+			*extension_data = serverinfo;
+			*extension_length = len;
+			return 1; /* Success */
+			}
+
+		serverinfo += len;
+		serverinfo_length -= len;
 		}
-	current_key->authz = OPENSSL_realloc(current_key->authz, authz_length);
-	current_key->authz_length = authz_length;
-	memcpy(current_key->authz, authz, authz_length);
+	return 0; /* Error */
+	}
+
+static int serverinfo_srv_parse_cb(SSL *s, unsigned int ext_type,
+				   const unsigned char *in,
+				   size_t inlen, int *al,
+				   void *arg)
+	{
+
+	if (inlen != 0)
+		{
+		*al = SSL_AD_DECODE_ERROR;
+		return 0;
+		}
+
 	return 1;
 	}
 
-int SSL_CTX_use_authz(SSL_CTX *ctx, unsigned char *authz,
-	size_t authz_length)
+static int serverinfo_srv_add_cb(SSL *s, unsigned int ext_type,
+			    	 const unsigned char **out, size_t *outlen,
+			 	 int *al, void *arg)
 	{
-	if (authz == NULL)
+	const unsigned char *serverinfo = NULL;
+	size_t serverinfo_length = 0;
+
+	/* Is there serverinfo data for the chosen server cert? */
+	if ((ssl_get_server_cert_serverinfo(s, &serverinfo,
+					    &serverinfo_length)) != 0)
 		{
-		SSLerr(SSL_F_SSL_CTX_USE_AUTHZ,ERR_R_PASSED_NULL_PARAMETER);
+		/* Find the relevant extension from the serverinfo */
+		int retval = serverinfo_find_extension(serverinfo, serverinfo_length,
+						       ext_type, out, outlen);
+		if (retval == 0)
+			return 0; /* Error */
+		if (retval == -1)
+			return -1; /* No extension found, don't send extension */
+		return 1; /* Send extension */
+		}
+	return -1; /* No serverinfo data found, don't send extension */
+	}
+
+/* With a NULL context, this function just checks that the serverinfo data
+   parses correctly.  With a non-NULL context, it registers callbacks for 
+   the included extensions. */
+static int serverinfo_process_buffer(const unsigned char *serverinfo, 
+			    	     size_t serverinfo_length, SSL_CTX *ctx)
+	{
+	if (serverinfo == NULL || serverinfo_length == 0)
+		return 0;
+	for (;;)
+		{
+		unsigned int ext_type = 0;
+		size_t len = 0;
+
+		/* end of serverinfo */
+		if (serverinfo_length == 0)
+			return 1;
+
+		/* read 2-byte type field */
+		if (serverinfo_length < 2)
+			return 0;
+		/* FIXME: check for types we understand explicitly? */
+
+		/* Register callbacks for extensions */
+		ext_type = (serverinfo[0] << 8) + serverinfo[1];
+		if (ctx && !SSL_CTX_add_server_custom_ext(ctx, ext_type, 
+							  serverinfo_srv_add_cb,
+							  NULL, NULL,
+							  serverinfo_srv_parse_cb, 
+							  NULL))
+			return 0;
+
+		serverinfo += 2;
+		serverinfo_length -= 2;
+
+		/* read 2-byte len field */
+		if (serverinfo_length < 2)
+			return 0;
+		len = (serverinfo[0] << 8) + serverinfo[1];
+		serverinfo += 2;
+		serverinfo_length -= 2;
+
+		if (len > serverinfo_length)
+			return 0;
+
+		serverinfo += len;
+		serverinfo_length -= len;
+		}
+	}
+
+int SSL_CTX_use_serverinfo(SSL_CTX *ctx, const unsigned char *serverinfo,
+			   size_t serverinfo_length)
+	{
+	if (ctx == NULL || serverinfo == NULL || serverinfo_length == 0)
+		{
+		SSLerr(SSL_F_SSL_CTX_USE_SERVERINFO,ERR_R_PASSED_NULL_PARAMETER);
+		return 0;
+		}
+	if (!serverinfo_process_buffer(serverinfo, serverinfo_length, NULL))
+		{
+		SSLerr(SSL_F_SSL_CTX_USE_SERVERINFO,SSL_R_INVALID_SERVERINFO_DATA);
 		return 0;
 		}
 	if (!ssl_cert_inst(&ctx->cert))
 		{
-		SSLerr(SSL_F_SSL_CTX_USE_AUTHZ,ERR_R_MALLOC_FAILURE);
+		SSLerr(SSL_F_SSL_CTX_USE_SERVERINFO,ERR_R_MALLOC_FAILURE);
 		return 0;
 		}
-	return ssl_set_authz(ctx->cert, authz, authz_length);
-	}
-
-int SSL_use_authz(SSL *ssl, unsigned char *authz, size_t authz_length)
-	{
-	if (authz == NULL)
+	if (ctx->cert->key == NULL)
 		{
-		SSLerr(SSL_F_SSL_USE_AUTHZ,ERR_R_PASSED_NULL_PARAMETER);
+		SSLerr(SSL_F_SSL_CTX_USE_SERVERINFO,ERR_R_INTERNAL_ERROR);
 		return 0;
 		}
-	if (!ssl_cert_inst(&ssl->cert))
+	ctx->cert->key->serverinfo = OPENSSL_realloc(ctx->cert->key->serverinfo,
+						     serverinfo_length);
+	if (ctx->cert->key->serverinfo == NULL)
 		{
-		SSLerr(SSL_F_SSL_USE_AUTHZ,ERR_R_MALLOC_FAILURE);
+		SSLerr(SSL_F_SSL_CTX_USE_SERVERINFO,ERR_R_MALLOC_FAILURE);
 		return 0;
 		}
-	return ssl_set_authz(ssl->cert, authz, authz_length);
-	}
+	memcpy(ctx->cert->key->serverinfo, serverinfo, serverinfo_length);
+	ctx->cert->key->serverinfo_length = serverinfo_length;
 
-const unsigned char *SSL_CTX_get_authz_data(SSL_CTX *ctx, unsigned char type,
-					    size_t *data_length)
-	{
-	CERT_PKEY *current_key;
-
-	if (ctx->cert == NULL)
-		return NULL;
-	current_key = ctx->cert->key;
-	if (current_key->authz == NULL)
-		return NULL;
-	return authz_find_data(current_key->authz,
-		current_key->authz_length, type, data_length);
+	/* Now that the serverinfo is validated and stored, go ahead and 
+	 * register callbacks. */
+	if (!serverinfo_process_buffer(serverinfo, serverinfo_length, ctx))
+		{
+		SSLerr(SSL_F_SSL_CTX_USE_SERVERINFO,SSL_R_INVALID_SERVERINFO_DATA);
+		return 0;
+		}
+	return 1;
 	}
 
 #ifndef OPENSSL_NO_STDIO
-/* read_authz returns a newly allocated buffer with authz data */
-static unsigned char *read_authz(const char *file, size_t *authz_length)
+int SSL_CTX_use_serverinfo_file(SSL_CTX *ctx, const char *file)
 	{
-	BIO *authz_in = NULL;
-	unsigned char *authz = NULL;
-	/* Allow authzs up to 64KB. */
-	static const size_t authz_limit = 65536;
-	size_t read_length;
-	unsigned char *ret = NULL;
+	unsigned char *serverinfo = NULL;
+	size_t serverinfo_length = 0;
+	unsigned char* extension = 0;
+	long extension_length = 0;
+	char* name = NULL;
+	char* header = NULL;
+	char namePrefix[] = "SERVERINFO FOR ";
+	int ret = 0;
+	BIO *bin = NULL;
+	size_t num_extensions = 0;
 
-	authz_in = BIO_new(BIO_s_file_internal());
-	if (authz_in == NULL)
+	if (ctx == NULL || file == NULL)
 		{
-		SSLerr(SSL_F_READ_AUTHZ,ERR_R_BUF_LIB);
+		SSLerr(SSL_F_SSL_CTX_USE_SERVERINFO_FILE,ERR_R_PASSED_NULL_PARAMETER);
 		goto end;
 		}
 
-	if (BIO_read_filename(authz_in,file) <= 0)
+	bin = BIO_new(BIO_s_file_internal());
+	if (bin == NULL)
 		{
-		SSLerr(SSL_F_READ_AUTHZ,ERR_R_SYS_LIB);
+		SSLerr(SSL_F_SSL_CTX_USE_SERVERINFO_FILE, ERR_R_BUF_LIB);
+		goto end;
+		}
+	if (BIO_read_filename(bin, file) <= 0)
+		{
+		SSLerr(SSL_F_SSL_CTX_USE_SERVERINFO_FILE, ERR_R_SYS_LIB);
 		goto end;
 		}
 
-	authz = OPENSSL_malloc(authz_limit);
-	read_length = BIO_read(authz_in, authz, authz_limit);
-	if (read_length == authz_limit || read_length <= 0)
+	for (num_extensions=0;; num_extensions++)
 		{
-		SSLerr(SSL_F_READ_AUTHZ,SSL_R_AUTHZ_DATA_TOO_LARGE);
-		OPENSSL_free(authz);
-		goto end;
+		if (PEM_read_bio(bin, &name, &header, &extension, &extension_length) == 0)
+			{
+			/* There must be at least one extension in this file */
+			if (num_extensions == 0)
+				{
+				SSLerr(SSL_F_SSL_CTX_USE_SERVERINFO_FILE, SSL_R_NO_PEM_EXTENSIONS);
+				goto end;
+				}
+			else /* End of file, we're done */
+				break;
+			}
+		/* Check that PEM name starts with "BEGIN SERVERINFO FOR " */
+		if (strlen(name) < strlen(namePrefix))
+			{
+			SSLerr(SSL_F_SSL_CTX_USE_SERVERINFO_FILE, SSL_R_PEM_NAME_TOO_SHORT);
+			goto end;
+			}
+		if (strncmp(name, namePrefix, strlen(namePrefix)) != 0)
+			{
+			SSLerr(SSL_F_SSL_CTX_USE_SERVERINFO_FILE, SSL_R_PEM_NAME_BAD_PREFIX);
+			goto end;
+			}
+		/* Check that the decoded PEM data is plausible (valid length field) */
+		if (extension_length < 4 || (extension[2] << 8) + extension[3] != extension_length - 4)
+			{
+			SSLerr(SSL_F_SSL_CTX_USE_SERVERINFO_FILE, SSL_R_BAD_DATA);
+			goto end;
+			}
+		/* Append the decoded extension to the serverinfo buffer */
+		serverinfo = OPENSSL_realloc(serverinfo, serverinfo_length + extension_length);
+		if (serverinfo == NULL)
+			{
+			SSLerr(SSL_F_SSL_CTX_USE_SERVERINFO_FILE, ERR_R_MALLOC_FAILURE);
+			goto end;
+			}
+		memcpy(serverinfo + serverinfo_length, extension, extension_length);
+		serverinfo_length += extension_length;
+
+		OPENSSL_free(name); name = NULL;
+		OPENSSL_free(header); header = NULL;
+		OPENSSL_free(extension); extension = NULL;
 		}
-	*authz_length = read_length;
-	ret = authz;
+
+	ret = SSL_CTX_use_serverinfo(ctx, serverinfo, serverinfo_length);
 end:
-	if (authz_in != NULL) BIO_free(authz_in);
-	return ret;
-	}
-
-int SSL_CTX_use_authz_file(SSL_CTX *ctx, const char *file)
-	{
-	unsigned char *authz = NULL;
-	size_t authz_length = 0;
-	int ret;
-
-	authz = read_authz(file, &authz_length);
-	if (authz == NULL)
-		return 0;
-
-	ret = SSL_CTX_use_authz(ctx, authz, authz_length);
-	/* SSL_CTX_use_authz makes a local copy of the authz. */
-	OPENSSL_free(authz);
-	return ret;
-	}
-
-int SSL_use_authz_file(SSL *ssl, const char *file)
-	{
-	unsigned char *authz = NULL;
-	size_t authz_length = 0;
-	int ret;
-
-	authz = read_authz(file, &authz_length);
-	if (authz == NULL)
-		return 0;
-
-	ret = SSL_use_authz(ssl, authz, authz_length);
-	/* SSL_use_authz makes a local copy of the authz. */
-	OPENSSL_free(authz);
+	/* SSL_CTX_use_serverinfo makes a local copy of the serverinfo. */
+	OPENSSL_free(name);
+	OPENSSL_free(header);
+	OPENSSL_free(extension);
+	OPENSSL_free(serverinfo);
+	if (bin != NULL)
+		BIO_free(bin);
 	return ret;
 	}
 #endif /* OPENSSL_NO_STDIO */

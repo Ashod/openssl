@@ -103,7 +103,7 @@ int MAIN(int, char **);
 
 int MAIN(int argc, char **argv)
 	{
-	ENGINE *e = NULL;
+	ENGINE *e = NULL, *impl = NULL;
 	unsigned char *buf=NULL;
 	int i,err=1;
 	const EVP_MD *md=NULL,*m;
@@ -124,6 +124,7 @@ int MAIN(int argc, char **argv)
 	char *passargin = NULL, *passin = NULL;
 #ifndef OPENSSL_NO_ENGINE
 	char *engine=NULL;
+	int engine_impl = 0;
 #endif
 	char *hmac_key=NULL;
 	char *mac_name=NULL;
@@ -209,6 +210,8 @@ int MAIN(int argc, char **argv)
 			engine= *(++argv);
         		e = setup_engine(bio_err, engine, 0);
 			}
+		else if (strcmp(*argv,"-engine_impl") == 0)
+			engine_impl = 1;
 #endif
 		else if (strcmp(*argv,"-hex") == 0)
 			out_bin = 0;
@@ -291,6 +294,11 @@ int MAIN(int argc, char **argv)
 		goto end;
 		}
 
+#ifndef OPENSSL_NO_ENGINE
+	if (engine_impl)
+		impl = e;
+#endif
+
 	in=BIO_new(BIO_s_file());
 	bmd=BIO_new(BIO_f_md());
 	if (debug)
@@ -368,7 +376,7 @@ int MAIN(int argc, char **argv)
 		{
 		EVP_PKEY_CTX *mac_ctx = NULL;
 		int r = 0;
-		if (!init_gen_str(bio_err, &mac_ctx, mac_name,e, 0))
+		if (!init_gen_str(bio_err, &mac_ctx, mac_name, impl, 0))
 			goto mac_end;
 		if (macopts)
 			{
@@ -409,7 +417,7 @@ int MAIN(int argc, char **argv)
 
 	if (hmac_key)
 		{
-		sigkey = EVP_PKEY_new_mac_key(EVP_PKEY_HMAC, e,
+		sigkey = EVP_PKEY_new_mac_key(EVP_PKEY_HMAC, impl,
 					(unsigned char *)hmac_key, -1);
 		if (!sigkey)
 			goto end;
@@ -427,9 +435,9 @@ int MAIN(int argc, char **argv)
 			goto end;
 			}
 		if (do_verify)
-			r = EVP_DigestVerifyInit(mctx, &pctx, md, e, sigkey);
+			r = EVP_DigestVerifyInit(mctx, &pctx, md, impl, sigkey);
 		else
-			r = EVP_DigestSignInit(mctx, &pctx, md, e, sigkey);
+			r = EVP_DigestSignInit(mctx, &pctx, md, impl, sigkey);
 		if (!r)
 			{
 			BIO_printf(bio_err, "Error setting context\n");
@@ -456,9 +464,16 @@ int MAIN(int argc, char **argv)
 	/* we use md as a filter, reading from 'in' */
 	else
 		{
+		EVP_MD_CTX *mctx = NULL;
+		if (!BIO_get_md_ctx(bmd, &mctx))
+			{
+			BIO_printf(bio_err, "Error getting context\n");
+			ERR_print_errors(bio_err);
+			goto end;
+			}
 		if (md == NULL)
 			md = EVP_md5(); 
-		if (!BIO_set_md(bmd,md))
+		if (!EVP_DigestInit_ex(mctx, md, impl))
 			{
 			BIO_printf(bio_err, "Error setting digest %s\n", pname);
 			ERR_print_errors(bio_err);
@@ -514,7 +529,8 @@ int MAIN(int argc, char **argv)
 					EVP_PKEY_asn1_get0_info(NULL, NULL,
 						NULL, NULL, &sig_name, ameth);
 				}
-			md_name = EVP_MD_name(md);
+			if (md)
+				md_name = EVP_MD_name(md);
 			}
 		err = 0;
 		for (i=0; i<argc; i++)
@@ -626,7 +642,12 @@ int do_fp(BIO *out, unsigned char *buf, BIO *bp, int sep, int binout,
 	else 
 		{
 		if (sig_name)
-			BIO_printf(out, "%s-%s(%s)= ", sig_name, md_name, file);
+			{
+			BIO_puts(out, sig_name);
+			if (md_name)
+				BIO_printf(out, "-%s", md_name);
+			BIO_printf(out, "(%s)= ", file);
+			}
 		else if (md_name)
 			BIO_printf(out, "%s(%s)= ", md_name, file);
 		else

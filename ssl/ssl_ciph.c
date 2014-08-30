@@ -270,6 +270,7 @@ static const SSL_CIPHER cipher_aliases[]={
 	{0,SSL_TXT_aGOST94,0,0,SSL_aGOST94,0,0,0,0,0,0,0},
 	{0,SSL_TXT_aGOST01,0,0,SSL_aGOST01,0,0,0,0,0,0,0},
 	{0,SSL_TXT_aGOST,0,0,SSL_aGOST94|SSL_aGOST01,0,0,0,0,0,0,0},
+	{0,SSL_TXT_aSRP,0,    0,SSL_aSRP,  0,0,0,0,0,0,0},
 
 	/* aliases combining key exchange and server authentication */
 	{0,SSL_TXT_EDH,0,     SSL_kEDH,~SSL_aNULL,0,0,0,0,0,0,0},
@@ -562,7 +563,7 @@ int ssl_cipher_get_evp(const SSL_SESSION *s, const EVP_CIPHER **enc,
 		break;
 		}
 
-	if ((i < 0) || (i > SSL_ENC_NUM_IDX))
+	if ((i < 0) || (i >= SSL_ENC_NUM_IDX))
 		*enc=NULL;
 	else
 		{
@@ -596,7 +597,7 @@ int ssl_cipher_get_evp(const SSL_SESSION *s, const EVP_CIPHER **enc,
 		i= -1;
 		break;
 		}
-	if ((i < 0) || (i > SSL_MD_NUM_IDX))
+	if ((i < 0) || (i >= SSL_MD_NUM_IDX))
 	{
 		*md=NULL; 
 		if (mac_pkey_type!=NULL) *mac_pkey_type = NID_undef;
@@ -637,6 +638,14 @@ int ssl_cipher_get_evp(const SSL_SESSION *s, const EVP_CIPHER **enc,
 		else if (c->algorithm_enc == SSL_AES256 &&
 			 c->algorithm_mac == SSL_SHA1 &&
 			 (evp=EVP_get_cipherbyname("AES-256-CBC-HMAC-SHA1")))
+			*enc = evp, *md = NULL;
+		else if (c->algorithm_enc == SSL_AES128 &&
+			 c->algorithm_mac == SSL_SHA256 &&
+			 (evp=EVP_get_cipherbyname("AES-128-CBC-HMAC-SHA256")))
+			*enc = evp, *md = NULL;
+		else if (c->algorithm_enc == SSL_AES256 &&
+			 c->algorithm_mac == SSL_SHA256 &&
+			 (evp=EVP_get_cipherbyname("AES-256-CBC-HMAC-SHA256")))
 			*enc = evp, *md = NULL;
 		return(1);
 		}
@@ -923,7 +932,7 @@ static void ssl_cipher_apply_rule(unsigned long cipher_id,
 		int rule, int strength_bits,
 		CIPHER_ORDER **head_p, CIPHER_ORDER **tail_p)
 	{
-	CIPHER_ORDER *head, *tail, *curr, *curr2, *last;
+	CIPHER_ORDER *head, *tail, *curr, *next, *last;
 	const SSL_CIPHER *cp;
 	int reverse = 0;
 
@@ -940,21 +949,25 @@ static void ssl_cipher_apply_rule(unsigned long cipher_id,
 
 	if (reverse)
 		{
-		curr = tail;
+		next = tail;
 		last = head;
 		}
 	else
 		{
-		curr = head;
+		next = head;
 		last = tail;
 		}
 
-	curr2 = curr;
+	curr = NULL;
 	for (;;)
 		{
-		if ((curr == NULL) || (curr == last)) break;
-		curr = curr2;
-		curr2 = reverse ? curr->prev : curr->next;
+		if (curr == last) break;
+
+		curr = next;
+
+		if (curr == NULL) break;
+
+		next = reverse ? curr->prev : curr->next;
 
 		cp = curr->cipher;
 
@@ -1350,7 +1363,7 @@ static int ssl_cipher_process_rulestr(const char *rule_str,
 
 	return(retval);
 	}
-
+#ifndef OPENSSL_NO_EC
 static int check_suiteb_cipher_list(const SSL_METHOD *meth, CERT *c,
 					const char **prule_str)
 	{
@@ -1377,11 +1390,15 @@ static int check_suiteb_cipher_list(const SSL_METHOD *meth, CERT *c,
 
 	if (!suiteb_flags)
 		return 1;
-	/* Check version */
+	/* Check version: if TLS 1.2 ciphers allowed we can use Suite B */
 
-	if (meth->version != TLS1_2_VERSION)
+	if (!(meth->ssl3_enc->enc_flags & SSL_ENC_FLAG_TLS1_2_CIPHERS))
 		{
-		SSLerr(SSL_F_CHECK_SUITEB_CIPHER_LIST,
+		if (meth->ssl3_enc->enc_flags & SSL_ENC_FLAG_DTLS)
+			SSLerr(SSL_F_CHECK_SUITEB_CIPHER_LIST,
+				SSL_R_ONLY_DTLS_1_2_ALLOWED_IN_SUITEB_MODE);
+		else
+			SSLerr(SSL_F_CHECK_SUITEB_CIPHER_LIST,
 				SSL_R_ONLY_TLS_1_2_ALLOWED_IN_SUITEB_MODE);
 		return 0;
 		}
@@ -1405,6 +1422,7 @@ static int check_suiteb_cipher_list(const SSL_METHOD *meth, CERT *c,
 	c->ecdh_tmp_auto = 1;
 	return 1;
 	}
+#endif
 
 
 STACK_OF(SSL_CIPHER) *ssl_create_cipher_list(const SSL_METHOD *ssl_method,
@@ -1424,10 +1442,10 @@ STACK_OF(SSL_CIPHER) *ssl_create_cipher_list(const SSL_METHOD *ssl_method,
 	 */
 	if (rule_str == NULL || cipher_list == NULL || cipher_list_by_id == NULL)
 		return NULL;
-
+#ifndef OPENSSL_NO_EC
 	if (!check_suiteb_cipher_list(ssl_method, c, &rule_str))
 		return NULL;
-
+#endif
 
 	/*
 	 * To reduce the work to do we only want to process the compiled
@@ -1659,6 +1677,9 @@ char *SSL_CIPHER_description(const SSL_CIPHER *cipher, char *buf, int len)
 	case SSL_kSRP:
 		kx="SRP";
 		break;
+	case SSL_kGOST:
+		kx="GOST";
+		break;
 	default:
 		kx="unknown";
 		}
@@ -1688,6 +1709,15 @@ char *SSL_CIPHER_description(const SSL_CIPHER *cipher, char *buf, int len)
 		break;
 	case SSL_aPSK:
 		au="PSK";
+		break;
+	case SSL_aSRP:
+		au="SRP";
+		break;
+	case SSL_aGOST94:
+		au="GOST94";
+		break;
+	case SSL_aGOST01:
+		au="GOST01";
 		break;
 	default:
 		au="unknown";
@@ -1736,6 +1766,9 @@ char *SSL_CIPHER_description(const SSL_CIPHER *cipher, char *buf, int len)
 	case SSL_SEED:
 		enc="SEED(128)";
 		break;
+	case SSL_eGOST2814789CNT:
+		enc="GOST89(256)";
+		break;
 	default:
 		enc="unknown";
 		break;
@@ -1757,6 +1790,12 @@ char *SSL_CIPHER_description(const SSL_CIPHER *cipher, char *buf, int len)
 		break;
 	case SSL_AEAD:
 		mac="AEAD";
+		break;
+	case SSL_GOST89MAC:
+		mac="GOST89";
+		break;
+	case SSL_GOST94:
+		mac="GOST94";
 		break;
 	default:
 		mac="unknown";
@@ -1855,6 +1894,25 @@ STACK_OF(SSL_COMP) *SSL_COMP_get_compression_methods(void)
 	{
 	load_builtin_compressions();
 	return(ssl_comp_methods);
+	}
+
+STACK_OF(SSL_COMP) *SSL_COMP_set0_compression_methods(STACK_OF(SSL_COMP) *meths)
+	{
+	STACK_OF(SSL_COMP) *old_meths = ssl_comp_methods;
+	ssl_comp_methods = meths;
+	return old_meths;
+	}
+
+static void cmeth_free(SSL_COMP *cm)
+	{
+	OPENSSL_free(cm);
+	}
+
+void SSL_COMP_free_compression_methods(void)
+	{
+	STACK_OF(SSL_COMP) *old_meths = ssl_comp_methods;
+	ssl_comp_methods = NULL;
+	sk_SSL_COMP_pop_free(old_meths, cmeth_free);
 	}
 
 int SSL_COMP_add_compression_method(int id, COMP_METHOD *cm)

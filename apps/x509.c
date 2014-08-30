@@ -150,6 +150,9 @@ static const char *x509_usage[]={
 " -engine e       - use engine e, possibly a hardware device.\n",
 #endif
 " -certopt arg    - various certificate text options\n",
+" -checkhost host - check certificate matches \"host\"\n",
+" -checkemail email - check certificate matches \"email\"\n",
+" -checkip ipaddr - check certificate matches \"ipaddr\"\n",
 NULL
 };
 
@@ -163,6 +166,9 @@ static int x509_certify (X509_STORE *ctx,char *CAfile,const EVP_MD *digest,
 			 CONF *conf, char *section, ASN1_INTEGER *sno);
 static int purpose_print(BIO *bio, X509 *cert, X509_PURPOSE *pt);
 static int reqfile=0;
+#ifdef OPENSSL_SSL_DEBUG_BROKEN_PROTOCOL
+static int force_version=2;
+#endif
 
 int MAIN(int, char **);
 
@@ -176,7 +182,7 @@ int MAIN(int argc, char **argv)
 	STACK_OF(OPENSSL_STRING) *sigopts = NULL;
 	EVP_PKEY *Upkey=NULL,*CApkey=NULL, *fkey = NULL;
 	ASN1_INTEGER *sno = NULL;
-	int i,num,badops=0;
+	int i,num,badops=0, badsig=0;
 	BIO *out=NULL;
 	BIO *STDout=NULL;
 	STACK_OF(ASN1_OBJECT) *trust = NULL, *reject = NULL;
@@ -208,7 +214,8 @@ int MAIN(int argc, char **argv)
 	int need_rand = 0;
 	int checkend=0,checkoffset=0;
 	unsigned long nmflag = 0, certflag = 0;
-	unsigned char *checkhost = NULL, *checkemail = NULL;
+	char *checkhost = NULL;
+	char *checkemail = NULL;
 	char *checkip = NULL;
 #ifndef OPENSSL_NO_ENGINE
 	char *engine=NULL;
@@ -285,6 +292,13 @@ int MAIN(int argc, char **argv)
 			if (!sigopts || !sk_OPENSSL_STRING_push(sigopts, *(++argv)))
 				goto bad;
 			}
+#ifdef OPENSSL_SSL_DEBUG_BROKEN_PROTOCOL
+		else if (strcmp(*argv,"-force_version") == 0)
+			{
+			if (--argc < 1) goto bad;
+			force_version=atoi(*(++argv)) - 1;
+			}
+#endif
 		else if (strcmp(*argv,"-days") == 0)
 			{
 			if (--argc < 1) goto bad;
@@ -461,12 +475,12 @@ int MAIN(int argc, char **argv)
 		else if (strcmp(*argv,"-checkhost") == 0)
 			{
 			if (--argc < 1) goto bad;
-			checkhost=(unsigned char *)*(++argv);
+			checkhost=*(++argv);
 			}
 		else if (strcmp(*argv,"-checkemail") == 0)
 			{
 			if (--argc < 1) goto bad;
-			checkemail=(unsigned char *)*(++argv);
+			checkemail=*(++argv);
 			}
 		else if (strcmp(*argv,"-checkip") == 0)
 			{
@@ -496,6 +510,8 @@ int MAIN(int argc, char **argv)
 #endif
 		else if (strcmp(*argv,"-ocspid") == 0)
 			ocspid= ++num;
+		else if (strcmp(*argv,"-badsig") == 0)
+			badsig = 1;
 		else if ((md_alg=EVP_get_digestbyname(*argv + 1)))
 			{
 			/* ok */
@@ -1086,6 +1102,9 @@ bad:
 		goto end;
 		}
 
+	if (badsig)
+		x->signature->data[x->signature->length - 1] ^= 0x1;
+
 	if 	(outformat == FORMAT_ASN1)
 		i=i2d_X509_bio(out,x);
 	else if (outformat == FORMAT_PEM)
@@ -1239,7 +1258,11 @@ static int x509_certify(X509_STORE *ctx, char *CAfile, const EVP_MD *digest,
 	if (conf)
 		{
 		X509V3_CTX ctx2;
+#ifdef OPENSSL_SSL_DEBUG_BROKEN_PROTOCOL
+		X509_set_version(x, force_version);
+#else
 		X509_set_version(x,2); /* version 3 certificate */
+#endif
                 X509V3_set_ctx(&ctx2, xca, x, NULL, NULL, 0);
                 X509V3_set_nconf(&ctx2, conf);
                 if (!X509V3_EXT_add_nconf(conf, &ctx2, section, x)) goto end;
@@ -1317,7 +1340,11 @@ static int sign(X509 *x, EVP_PKEY *pkey, int days, int clrext, const EVP_MD *dig
 	if (conf)
 		{
 		X509V3_CTX ctx;
+#ifdef OPENSSL_SSL_DEBUG_BROKEN_PROTOCOL
+		X509_set_version(x, force_version);
+#else
 		X509_set_version(x,2); /* version 3 certificate */
+#endif
                 X509V3_set_ctx(&ctx, x, x, NULL, NULL, 0);
                 X509V3_set_nconf(&ctx, conf);
                 if (!X509V3_EXT_add_nconf(conf, &ctx, section, x)) goto err;

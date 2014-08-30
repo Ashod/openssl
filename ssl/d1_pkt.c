@@ -239,14 +239,6 @@ dtls1_buffer_record(SSL *s, record_pqueue *queue, unsigned char *priority)
 	}
 #endif
 
-	/* insert should not fail, since duplicates are dropped */
-	if (pqueue_insert(queue->q, item) == NULL)
-		{
-		OPENSSL_free(rdata);
-		pitem_free(item);
-		return(0);
-		}
-
 	s->packet = NULL;
 	s->packet_length = 0;
 	memset(&(s->s3->rbuf), 0, sizeof(SSL3_BUFFER));
@@ -259,7 +251,16 @@ dtls1_buffer_record(SSL *s, record_pqueue *queue, unsigned char *priority)
 		pitem_free(item);
 		return(0);
 		}
-	
+
+	/* insert should not fail, since duplicates are dropped */
+	if (pqueue_insert(queue->q, item) == NULL)
+		{
+		SSLerr(SSL_F_DTLS1_BUFFER_RECORD, ERR_R_INTERNAL_ERROR);
+		OPENSSL_free(rdata);
+		pitem_free(item);
+		return(0);
+		}
+
 	return(1);
 	}
 
@@ -589,6 +590,9 @@ again:
 
 		p=s->packet;
 
+		if (s->msg_callback)
+			s->msg_callback(0, 0, SSL3_RT_HEADER, p, DTLS1_RT_HEADER_LENGTH, s, s->msg_callback_arg);
+
 		/* Pull apart the header into the DTLS1_RECORD */
 		rr->type= *(p++);
 		ssl_major= *(p++);
@@ -847,6 +851,12 @@ start:
 			}
 		}
 
+	if (s->d1->listen && rr->type != SSL3_RT_HANDSHAKE)
+		{
+		rr->length = 0;
+		goto start;
+		}
+
 	/* we now have a packet which can be read and processed */
 
 	if (s->s3->change_cipher_spec /* set when we receive ChangeCipherSpec,
@@ -1051,6 +1061,7 @@ start:
 			!(s->s3->flags & SSL3_FLAGS_NO_RENEGOTIATE_CIPHERS) &&
 			!s->s3->renegotiate)
 			{
+			s->d1->handshake_read_seq++;
 			s->new_session = 1;
 			ssl3_renegotiate(s);
 			if (ssl3_renegotiate_check(s))
@@ -1465,10 +1476,10 @@ int do_dtls1_write(SSL *s, int type, const unsigned char *buf, unsigned int len,
 	unsigned char *p,*pseq;
 	int i,mac_size,clear=0;
 	int prefix_len = 0;
+	int eivlen;
 	SSL3_RECORD *wr;
 	SSL3_BUFFER *wb;
 	SSL_SESSION *sess;
-	int bs;
 
 	/* first check if there is a SSL3_BUFFER still being written
 	 * out.  This will happen with non blocking IO */
@@ -1545,26 +1556,46 @@ int do_dtls1_write(SSL *s, int type, const unsigned char *buf, unsigned int len,
 
 	*(p++)=type&0xff;
 	wr->type=type;
-
-	*(p++)=(s->version>>8);
-	*(p++)=s->version&0xff;
+	/* Special case: for hello verify request, client version 1.0 and
+	 * we haven't decided which version to use yet send back using 
+	 * version 1.0 header: otherwise some clients will ignore it.
+	 */
+	if (s->method->version == DTLS_ANY_VERSION)
+		{
+		*(p++)=DTLS1_VERSION>>8;
+		*(p++)=DTLS1_VERSION&0xff;
+		}
+	else
+		{
+		*(p++)=s->version>>8;
+		*(p++)=s->version&0xff;
+		}
 
 	/* field where we are to write out packet epoch, seq num and len */
 	pseq=p; 
 	p+=10;
 
+	/* Explicit IV length, block ciphers appropriate version flag */
+	if (s->enc_write_ctx)
+		{
+		int mode = EVP_CIPHER_CTX_mode(s->enc_write_ctx);
+		if (mode == EVP_CIPH_CBC_MODE)
+			{
+			eivlen = EVP_CIPHER_CTX_iv_length(s->enc_write_ctx);
+			if (eivlen <= 1)
+				eivlen = 0;
+			}
+		/* Need explicit part of IV for GCM mode */
+		else if (mode == EVP_CIPH_GCM_MODE)
+			eivlen = EVP_GCM_TLS_EXPLICIT_IV_LEN;
+		else
+			eivlen = 0;
+		}
+	else 
+		eivlen = 0;
+
 	/* lets setup the record stuff. */
-
-	/* Make space for the explicit IV in case of CBC.
-	 * (this is a bit of a boundary violation, but what the heck).
-	 */
-	if ( s->enc_write_ctx && 
-		(EVP_CIPHER_mode( s->enc_write_ctx->cipher ) & EVP_CIPH_CBC_MODE))
-		bs = EVP_CIPHER_block_size(s->enc_write_ctx->cipher);
-	else
-		bs = 0;
-
-	wr->data=p + bs;  /* make room for IV in case of CBC */
+	wr->data=p + eivlen;  /* make room for IV in case of CBC */
 	wr->length=(int)len;
 	wr->input=(unsigned char *)buf;
 
@@ -1592,7 +1623,7 @@ int do_dtls1_write(SSL *s, int type, const unsigned char *buf, unsigned int len,
 
 	if (mac_size != 0)
 		{
-		if(s->method->ssl3_enc->mac(s,&(p[wr->length + bs]),1) < 0)
+		if(s->method->ssl3_enc->mac(s,&(p[wr->length + eivlen]),1) < 0)
 			goto err;
 		wr->length+=mac_size;
 		}
@@ -1601,15 +1632,8 @@ int do_dtls1_write(SSL *s, int type, const unsigned char *buf, unsigned int len,
 	wr->input=p;
 	wr->data=p;
 
-
-	/* ssl3_enc can only have an error on read */
-	if (bs)	/* bs != 0 in case of CBC */
-		{
-		RAND_pseudo_bytes(p,bs);
-		/* master IV and last CBC residue stand for
-		 * the rest of randomness */
-		wr->length += bs;
-		}
+	if (eivlen)
+		wr->length += eivlen;
 
 	s->method->ssl3_enc->enc(s,1);
 
@@ -1628,6 +1652,9 @@ int do_dtls1_write(SSL *s, int type, const unsigned char *buf, unsigned int len,
 	memcpy(pseq, &(s->s3->write_sequence[2]), 6);
 	pseq+=6;
 	s2n(wr->length,pseq);
+
+	if (s->msg_callback)
+		s->msg_callback(1, 0, SSL3_RT_HEADER, pseq - DTLS1_RT_HEADER_LENGTH, DTLS1_RT_HEADER_LENGTH, s, s->msg_callback_arg);
 
 	/* we should now have
 	 * wr->data pointing to the encrypted data, which is

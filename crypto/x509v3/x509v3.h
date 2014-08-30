@@ -414,7 +414,6 @@ struct ISSUING_DIST_POINT_st
 #define EXFLAG_CA		0x10
 /* Really self issued not necessarily self signed */
 #define EXFLAG_SI		0x20
-#define EXFLAG_SS		0x20
 #define EXFLAG_V1		0x40
 #define EXFLAG_INVALID		0x80
 #define EXFLAG_SET		0x100
@@ -423,6 +422,8 @@ struct ISSUING_DIST_POINT_st
 
 #define EXFLAG_INVALID_POLICY	0x800
 #define EXFLAG_FRESHEST		0x1000
+/* Self signed */
+#define EXFLAG_SS		0x2000
 
 #define KU_DIGITAL_SIGNATURE	0x0080
 #define KU_NON_REPUDIATION	0x0040
@@ -659,6 +660,7 @@ int X509V3_add_standard_extensions(void);
 STACK_OF(CONF_VALUE) *X509V3_parse_list(const char *line);
 void *X509V3_EXT_d2i(X509_EXTENSION *ext);
 void *X509V3_get_d2i(STACK_OF(X509_EXTENSION) *x, int nid, int *crit, int *idx);
+int X509V3_EXT_free(int nid, void *ext_data);
 
 
 X509_EXTENSION *X509V3_EXT_i2d(int ext_nid, int crit, void *ext_struc);
@@ -702,12 +704,24 @@ STACK_OF(OPENSSL_STRING) *X509_get1_ocsp(X509 *x);
 
 /* Always check subject name for host match even if subject alt names present */
 #define X509_CHECK_FLAG_ALWAYS_CHECK_SUBJECT	0x1
-/* Disable wild-card matching for dnsName fields and common name. */
+/* Disable wildcard matching for dnsName fields and common name. */
 #define X509_CHECK_FLAG_NO_WILDCARDS	0x2
+/* Wildcards must not match a partial label. */
+#define X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS 0x4
+/* Allow (non-partial) wildcards to match multiple labels. */
+#define X509_CHECK_FLAG_MULTI_LABEL_WILDCARDS 0x8
+/* Constraint verifier subdomain patterns to match a single labels. */
+#define X509_CHECK_FLAG_SINGLE_LABEL_SUBDOMAINS 0x10
+/*
+ * Match reference identifiers starting with "." to any sub-domain.
+ * This is a non-public flag, turned on implicitly when the subject
+ * reference identity is a DNS name.
+ */
+#define _X509_CHECK_FLAG_DOT_SUBDOMAINS 0x8000
 
-int X509_check_host(X509 *x, const unsigned char *chk, size_t chklen,
-					unsigned int flags);
-int X509_check_email(X509 *x, const unsigned char *chk, size_t chklen,
+int X509_check_host(X509 *x, const char *chk, size_t chklen,
+					unsigned int flags, char **peername);
+int X509_check_email(X509 *x, const char *chk, size_t chklen,
 					unsigned int flags);
 int X509_check_ip(X509 *x, const unsigned char *chk, size_t chklen,
 					unsigned int flags);
@@ -937,6 +951,7 @@ void ERR_load_X509V3_strings(void);
 #define X509V3_F_X509V3_EXT_ADD				 104
 #define X509V3_F_X509V3_EXT_ADD_ALIAS			 106
 #define X509V3_F_X509V3_EXT_CONF			 107
+#define X509V3_F_X509V3_EXT_FREE			 165
 #define X509V3_F_X509V3_EXT_I2D				 136
 #define X509V3_F_X509V3_EXT_NCONF			 152
 #define X509V3_F_X509V3_GET_SECTION			 142
@@ -951,6 +966,7 @@ void ERR_load_X509V3_strings(void);
 #define X509V3_R_BAD_OBJECT				 119
 #define X509V3_R_BN_DEC2BN_ERROR			 100
 #define X509V3_R_BN_TO_ASN1_INTEGER_ERROR		 101
+#define X509V3_R_CANNOT_FIND_FREE_FUNCTION		 168
 #define X509V3_R_DIRNAME_ERROR				 149
 #define X509V3_R_DISTPOINT_ALREADY_SET			 160
 #define X509V3_R_DUPLICATE_ZONE_ID			 133
@@ -966,13 +982,13 @@ void ERR_load_X509V3_strings(void);
 #define X509V3_R_ILLEGAL_EMPTY_EXTENSION		 151
 #define X509V3_R_ILLEGAL_HEX_DIGIT			 113
 #define X509V3_R_INCORRECT_POLICY_SYNTAX_TAG		 152
-#define X509V3_R_INVALID_MULTIPLE_RDNS			 161
 #define X509V3_R_INVALID_ASNUMBER			 162
 #define X509V3_R_INVALID_ASRANGE			 163
 #define X509V3_R_INVALID_BOOLEAN_STRING			 104
 #define X509V3_R_INVALID_EXTENSION_STRING		 105
 #define X509V3_R_INVALID_INHERITANCE			 165
 #define X509V3_R_INVALID_IPADDRESS			 166
+#define X509V3_R_INVALID_MULTIPLE_RDNS			 161
 #define X509V3_R_INVALID_NAME				 106
 #define X509V3_R_INVALID_NULL_ARGUMENT			 107
 #define X509V3_R_INVALID_NULL_NAME			 108

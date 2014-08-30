@@ -110,12 +110,27 @@
  */
 
 #include <stdio.h>
+#include <limits.h>
 #include <errno.h>
 #define USE_SOCKETS
 #include "ssl_locl.h"
 #include <openssl/evp.h>
 #include <openssl/buffer.h>
 #include <openssl/rand.h>
+
+#ifndef  EVP_CIPH_FLAG_TLS1_1_MULTIBLOCK
+# define EVP_CIPH_FLAG_TLS1_1_MULTIBLOCK 0
+#endif
+
+#if	defined(OPENSSL_SMALL_FOOTPRINT) || \
+	!(	defined(AES_ASM) &&	( \
+		defined(__x86_64)	|| defined(__x86_64__)	|| \
+		defined(_M_AMD64)	|| defined(_M_X64)	|| \
+		defined(__INTEL__)	) \
+	)
+# undef EVP_CIPH_FLAG_TLS1_1_MULTIBLOCK
+# define EVP_CIPH_FLAG_TLS1_1_MULTIBLOCK 0
+#endif
 
 static int do_ssl3_write(SSL *s, int type, const unsigned char *buf,
 			 unsigned int len, int create_empty_fragment);
@@ -180,7 +195,7 @@ int ssl3_read_n(SSL *s, int n, int max, int extend)
 	/* For DTLS/UDP reads should not span multiple packets
 	 * because the read operation returns the whole packet
 	 * at once (as long as it fits into the buffer). */
-	if (SSL_version(s) == DTLS1_VERSION || SSL_version(s) == DTLS1_BAD_VER)
+	if (SSL_IS_DTLS(s))
 		{
 		if (left > 0 && n > left)
 			n = left;
@@ -248,7 +263,7 @@ int ssl3_read_n(SSL *s, int n, int max, int extend)
 			{
 			rb->left = left;
 			if (s->mode & SSL_MODE_RELEASE_BUFFERS &&
-			    SSL_version(s) != DTLS1_VERSION && SSL_version(s) != DTLS1_BAD_VER)
+				!SSL_IS_DTLS(s))
 				if (len+left == 0)
 					ssl3_release_read_buffer(s);
 			return(i);
@@ -257,7 +272,7 @@ int ssl3_read_n(SSL *s, int n, int max, int extend)
 		/* reads should *never* span multiple packets for DTLS because
 		 * the underlying transport protocol is message oriented as opposed
 		 * to byte oriented as in the TLS case. */
-		if (SSL_version(s) == DTLS1_VERSION || SSL_version(s) == DTLS1_BAD_VER)
+		if (SSL_IS_DTLS(s))
 			{
 			if (n > left)
 				n = left; /* makes the while condition false */
@@ -271,6 +286,12 @@ int ssl3_read_n(SSL *s, int n, int max, int extend)
 	s->rwstate=SSL_NOTHING;
 	return(n);
 	}
+
+/* MAX_EMPTY_RECORDS defines the number of consecutive, empty records that will
+ * be processed per call to ssl3_get_record. Without this limit an attacker
+ * could send empty records at a faster rate than we can process and cause
+ * ssl3_get_record to loop forever. */
+#define MAX_EMPTY_RECORDS 32
 
 /* Call this to get a new input record.
  * It will return <= 0 if more data is needed, normally due to an error
@@ -292,6 +313,7 @@ static int ssl3_get_record(SSL *s)
 	short version;
 	unsigned mac_size, orig_len;
 	size_t extra;
+	unsigned empty_record_count = 0;
 
 	rr= &(s->s3->rrec);
 	sess=s->session;
@@ -337,7 +359,7 @@ fprintf(stderr, "Record type=%d, Length=%d\n", rr->type, rr->length);
 			if (version != s->version)
 				{
 				SSLerr(SSL_F_SSL3_GET_RECORD,SSL_R_WRONG_VERSION_NUMBER);
-                                if ((s->version & 0xFF00) == (version & 0xFF00))
+                                if ((s->version & 0xFF00) == (version & 0xFF00) && !s->enc_write_ctx && !s->write_hash)
                                 	/* Send back error using their minor version number :-) */
 					s->version = (unsigned short)version;
 				al=SSL_AD_PROTOCOL_VERSION;
@@ -524,7 +546,17 @@ printf("\n");
 	s->packet_length=0;
 
 	/* just read a 0 length packet */
-	if (rr->length == 0) goto again;
+	if (rr->length == 0)
+		{
+		empty_record_count++;
+		if (empty_record_count > MAX_EMPTY_RECORDS)
+			{
+			al=SSL_AD_UNEXPECTED_MESSAGE;
+			SSLerr(SSL_F_SSL3_GET_RECORD,SSL_R_RECORD_TOO_SMALL);
+			goto f_err;
+			}
+		goto again;
+		}
 
 #if 0
 fprintf(stderr, "Ultimate Record type=%d, Length=%d\n", rr->type, rr->length);
@@ -582,10 +614,16 @@ int ssl3_do_compress(SSL *ssl)
 int ssl3_write_bytes(SSL *s, int type, const void *buf_, int len)
 	{
 	const unsigned char *buf=buf_;
-	unsigned int tot,n,nw;
+	int tot;
+	unsigned int n,nw;
+#if !defined(OPENSSL_NO_MULTIBLOCK) && EVP_CIPH_FLAG_TLS1_1_MULTIBLOCK
+	unsigned int max_send_fragment;
+#endif
+	SSL3_BUFFER *wb=&(s->s3->wbuf);
 	int i;
 
 	s->rwstate=SSL_NOTHING;
+	OPENSSL_assert(s->s3->wnum <= INT_MAX);
 	tot=s->s3->wnum;
 	s->s3->wnum=0;
 
@@ -600,6 +638,180 @@ int ssl3_write_bytes(SSL *s, int type, const void *buf_, int len)
 			}
 		}
 
+	/* ensure that if we end up with a smaller value of data to write 
+	 * out than the the original len from a write which didn't complete 
+	 * for non-blocking I/O and also somehow ended up avoiding 
+	 * the check for this in ssl3_write_pending/SSL_R_BAD_WRITE_RETRY as
+	 * it must never be possible to end up with (len-tot) as a large
+	 * number that will then promptly send beyond the end of the users
+	 * buffer ... so we trap and report the error in a way the user
+	 * will notice
+	 */
+	if (len < tot)
+		{
+		SSLerr(SSL_F_SSL3_WRITE_BYTES,SSL_R_BAD_LENGTH);
+		return(-1);
+		}
+
+	/* first check if there is a SSL3_BUFFER still being written
+	 * out.  This will happen with non blocking IO */
+	if (wb->left != 0)
+		{
+		i = ssl3_write_pending(s,type,&buf[tot],s->s3->wpend_tot);
+		if (i<=0)
+			{
+			/* XXX should we ssl3_release_write_buffer if i<0? */
+			s->s3->wnum=tot;
+			return i;
+			}
+		tot += i;	/* this might be last fragment */
+		}
+
+#if !defined(OPENSSL_NO_MULTIBLOCK) && EVP_CIPH_FLAG_TLS1_1_MULTIBLOCK
+	/*
+	 * Depending on platform multi-block can deliver several *times*
+	 * better performance. Downside is that it has to allocate
+	 * jumbo buffer to accomodate up to 8 records, but the
+	 * compromise is considered worthy.
+	 */
+	if (type==SSL3_RT_APPLICATION_DATA &&
+	    len >= 4*(int)(max_send_fragment=s->max_send_fragment) &&
+	    s->compress==NULL && s->msg_callback==NULL &&
+	    SSL_USE_EXPLICIT_IV(s) &&
+	    EVP_CIPHER_flags(s->enc_write_ctx->cipher)&EVP_CIPH_FLAG_TLS1_1_MULTIBLOCK)
+		{
+		unsigned char aad[13];
+		EVP_CTRL_TLS1_1_MULTIBLOCK_PARAM mb_param;
+		int packlen;
+
+		/* minimize address aliasing conflicts */
+		if ((max_send_fragment&0xfff) == 0)
+			max_send_fragment -= 512;
+
+		if (tot==0 || wb->buf==NULL)	/* allocate jumbo buffer */
+			{
+			ssl3_release_write_buffer(s);
+
+			packlen = EVP_CIPHER_CTX_ctrl(s->enc_write_ctx,
+					EVP_CTRL_TLS1_1_MULTIBLOCK_MAX_BUFSIZE,
+					max_send_fragment,NULL);
+
+			if (len>=8*(int)max_send_fragment)	packlen *= 8;
+			else				packlen *= 4;
+
+			wb->buf=OPENSSL_malloc(packlen);
+			wb->len=packlen;
+			}
+		else if (tot==len)		/* done? */
+			{
+			OPENSSL_free(wb->buf);	/* free jumbo buffer */
+			wb->buf = NULL;
+			return tot;
+			}
+
+		n=(len-tot);
+		for (;;)
+			{
+			if (n < 4*max_send_fragment)
+				{
+				OPENSSL_free(wb->buf);	/* free jumbo buffer */
+				wb->buf = NULL;
+				break;
+				}
+
+			if (s->s3->alert_dispatch)
+				{
+				i=s->method->ssl_dispatch_alert(s);
+				if (i <= 0)
+					{
+					s->s3->wnum=tot;
+					return i;
+					}
+				}
+
+			if (n >= 8*max_send_fragment)
+				nw = max_send_fragment*(mb_param.interleave=8);
+			else
+				nw = max_send_fragment*(mb_param.interleave=4);
+
+			memcpy(aad,s->s3->write_sequence,8);
+			aad[8]=type;
+			aad[9]=(unsigned char)(s->version>>8);
+			aad[10]=(unsigned char)(s->version);
+			aad[11]=0;
+			aad[12]=0;
+			mb_param.out = NULL;
+			mb_param.inp = aad;
+			mb_param.len = nw;
+
+			packlen = EVP_CIPHER_CTX_ctrl(s->enc_write_ctx,
+					EVP_CTRL_TLS1_1_MULTIBLOCK_AAD,
+					sizeof(mb_param),&mb_param);
+
+			if (packlen<=0 || packlen>(int)wb->len)	/* never happens */
+				{
+				OPENSSL_free(wb->buf);	/* free jumbo buffer */
+				wb->buf = NULL;
+				break;
+				}
+
+			mb_param.out = wb->buf;
+			mb_param.inp = &buf[tot];
+			mb_param.len = nw;
+
+			if (EVP_CIPHER_CTX_ctrl(s->enc_write_ctx,
+					EVP_CTRL_TLS1_1_MULTIBLOCK_ENCRYPT,
+					sizeof(mb_param),&mb_param)<=0)
+				return -1;
+
+			s->s3->write_sequence[7] += mb_param.interleave;
+			if (s->s3->write_sequence[7] < mb_param.interleave)
+				{
+				int j=6;
+				while (j>=0 && (++s->s3->write_sequence[j--])==0) ;
+				}
+
+			wb->offset = 0;
+			wb->left = packlen;
+
+			s->s3->wpend_tot = nw;
+			s->s3->wpend_buf = &buf[tot];
+			s->s3->wpend_type= type;
+			s->s3->wpend_ret = nw;
+
+			i = ssl3_write_pending(s,type,&buf[tot],nw);
+			if (i<=0)
+				{
+				if (i<0)
+					{
+					OPENSSL_free(wb->buf);
+					wb->buf = NULL;
+					}
+				s->s3->wnum=tot;
+				return i;
+				}
+			if (i==(int)n)
+				{
+				OPENSSL_free(wb->buf);	/* free jumbo buffer */
+				wb->buf = NULL;
+				return tot+i;
+				}
+			n-=i;
+			tot+=i;
+			}
+		}
+	else
+#endif
+	if (tot==len)		/* done? */
+		{
+		if (s->mode & SSL_MODE_RELEASE_BUFFERS &&
+			!SSL_IS_DTLS(s))
+			ssl3_release_write_buffer(s);
+
+		return tot;
+		}
+
+
 	n=(len-tot);
 	for (;;)
 		{
@@ -611,6 +823,7 @@ int ssl3_write_bytes(SSL *s, int type, const void *buf_, int len)
 		i=do_ssl3_write(s, type, &(buf[tot]), nw, 0);
 		if (i <= 0)
 			{
+			/* XXX should we ssl3_release_write_buffer if i<0? */
 			s->s3->wnum=tot;
 			return i;
 			}
@@ -622,7 +835,11 @@ int ssl3_write_bytes(SSL *s, int type, const void *buf_, int len)
 			/* next chunk of data should get another prepended empty fragment
 			 * in ciphersuites with known-IV weakness: */
 			s->s3->empty_fragment_done = 0;
-			
+
+			if ((i==(int)n) && s->mode & SSL_MODE_RELEASE_BUFFERS &&
+				!SSL_IS_DTLS(s))
+				ssl3_release_write_buffer(s);
+
 			return tot+i;
 			}
 
@@ -643,9 +860,6 @@ static int do_ssl3_write(SSL *s, int type, const unsigned char *buf,
 	SSL3_BUFFER *wb=&(s->s3->wbuf);
 	SSL_SESSION *sess;
 
- 	if (wb->buf == NULL)
-		if (!ssl3_setup_write_buffer(s))
-			return -1;
 
 	/* first check if there is a SSL3_BUFFER still being written
 	 * out.  This will happen with non blocking IO */
@@ -660,6 +874,10 @@ static int do_ssl3_write(SSL *s, int type, const unsigned char *buf,
 			return(i);
 		/* if it went, fall through and send more stuff */
 		}
+
+ 	if (wb->buf == NULL)
+		if (!ssl3_setup_write_buffer(s))
+			return -1;
 
 	if (len == 0 && !create_empty_fragment)
 		return 0;
@@ -759,8 +977,8 @@ static int do_ssl3_write(SSL *s, int type, const unsigned char *buf,
 	/* field where we are to write out packet length */
 	plen=p; 
 	p+=2;
-	/* Explicit IV length, block ciphers and TLS version 1.1 or later */
-	if (s->enc_write_ctx && s->version >= TLS1_1_VERSION)
+	/* Explicit IV length, block ciphers appropriate version flag */
+	if (s->enc_write_ctx && SSL_USE_EXPLICIT_IV(s))
 		{
 		int mode = EVP_CIPHER_CTX_mode(s->enc_write_ctx);
 		if (mode == EVP_CIPH_CBC_MODE)
@@ -896,9 +1114,6 @@ int ssl3_write_pending(SSL *s, int type, const unsigned char *buf,
 			{
 			wb->left=0;
 			wb->offset+=i;
-			if (s->mode & SSL_MODE_RELEASE_BUFFERS &&
-			    SSL_version(s) != DTLS1_VERSION && SSL_version(s) != DTLS1_BAD_VER)
-				ssl3_release_write_buffer(s);
 			s->rwstate=SSL_NOTHING;
 			return(s->s3->wpend_ret);
 			}
@@ -954,7 +1169,7 @@ int ssl3_read_bytes(SSL *s, int type, unsigned char *buf, int len, int peek)
 		if (!ssl3_setup_read_buffer(s))
 			return(-1);
 
-	if ((type && (type != SSL3_RT_APPLICATION_DATA) && (type != SSL3_RT_HANDSHAKE) && type) ||
+	if ((type && (type != SSL3_RT_APPLICATION_DATA) && (type != SSL3_RT_HANDSHAKE)) ||
 	    (peek && (type != SSL3_RT_APPLICATION_DATA)))
 		{
 		SSLerr(SSL_F_SSL3_READ_BYTES, ERR_R_INTERNAL_ERROR);
@@ -1060,7 +1275,7 @@ start:
 				{
 				s->rstate=SSL_ST_READ_HEADER;
 				rr->off=0;
-				if (s->mode & SSL_MODE_RELEASE_BUFFERS)
+				if (s->mode & SSL_MODE_RELEASE_BUFFERS && s->s3->rbuf.left == 0)
 					ssl3_release_read_buffer(s);
 				}
 			}
@@ -1302,6 +1517,15 @@ start:
 			goto f_err;
 			}
 
+		if (!(s->s3->flags & SSL3_FLAGS_CCS_OK))
+			{
+			al=SSL_AD_UNEXPECTED_MESSAGE;
+			SSLerr(SSL_F_SSL3_READ_BYTES,SSL_R_CCS_RECEIVED_EARLY);
+			goto f_err;
+			}
+
+		s->s3->flags &= ~SSL3_FLAGS_CCS_OK;
+
 		rr->length=0;
 
 		if (s->msg_callback)
@@ -1436,7 +1660,7 @@ int ssl3_do_change_cipher_spec(SSL *s)
 
 	if (s->s3->tmp.key_block == NULL)
 		{
-		if (s->session == NULL) 
+		if (s->session == NULL || s->session->master_key_length == 0)
 			{
 			/* might happen if dtls1_read_bytes() calls this */
 			SSLerr(SSL_F_SSL3_DO_CHANGE_CIPHER_SPEC,SSL_R_CCS_RECEIVED_EARLY);
@@ -1464,8 +1688,14 @@ int ssl3_do_change_cipher_spec(SSL *s)
 		slen=s->method->ssl3_enc->client_finished_label_len;
 		}
 
-	s->s3->tmp.peer_finish_md_len = s->method->ssl3_enc->final_finish_mac(s,
+	i = s->method->ssl3_enc->final_finish_mac(s,
 		sender,slen,s->s3->tmp.peer_finish_md);
+	if (i == 0)
+		{
+		SSLerr(SSL_F_SSL3_DO_CHANGE_CIPHER_SPEC, ERR_R_INTERNAL_ERROR);
+		return 0;
+		}
+	s->s3->tmp.peer_finish_md_len = i;
 
 	return(1);
 	}

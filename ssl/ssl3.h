@@ -251,6 +251,8 @@ extern "C" {
 #define SSL3_SESSION_ID_SIZE			32
 #define SSL3_RT_HEADER_LENGTH			5
 
+#define SSL3_HM_HEADER_LENGTH                  4
+
 #ifndef SSL3_ALIGN_PAYLOAD
  /* Some will argue that this increases memory footprint, but it's
   * not actually true. Point is that malloc has to return at least
@@ -405,6 +407,7 @@ typedef struct ssl3_buffer_st
 #define TLS1_FLAGS_TLS_PADDING_BUG		0x0008
 #define TLS1_FLAGS_SKIP_CERT_VERIFY		0x0010
 #define TLS1_FLAGS_KEEP_HANDSHAKE		0x0020
+#define SSL3_FLAGS_CCS_OK			0x0080
  
 /* SSL3_FLAGS_SGC_RESTART_DONE is set when we
  * restart a handshake because of MS SGC and so prevents us
@@ -558,20 +561,23 @@ typedef struct ssl3_state_st
 #endif
 
 #ifndef OPENSSL_NO_TLSEXT
-	/* tlsext_authz_client_types contains an array of supported authz
-	 * types, as advertised by the client. The array is sorted and
-	 * does not contain any duplicates. */
-	unsigned char *tlsext_authz_client_types;
-	size_t tlsext_authz_client_types_len;
-	/* tlsext_authz_promised_to_client is true iff we're a server and we
-	 * echoed the client's supplemental data extension and therefore must
-	 * send a supplemental data handshake message. */
-	char tlsext_authz_promised_to_client;
-	/* tlsext_authz_server_promised is true iff we're a client and the
-	 * server echoed our server_authz extension and therefore must send us
-	 * a supplemental data handshake message. */
-	char tlsext_authz_server_promised;
-#endif
+#ifndef OPENSSL_NO_EC
+	/* This is set to true if we believe that this is a version of Safari
+	 * running on OS X 10.6 or newer. We wish to know this because Safari
+	 * on 10.8 .. 10.8.3 has broken ECDHE-ECDSA support. */
+	char is_probably_safari;
+#endif /* !OPENSSL_NO_EC */
+
+	/* ALPN information
+	 * (we are in the process of transitioning from NPN to ALPN.) */
+
+	/* In a server these point to the selected ALPN protocol after the
+	 * ClientHello has been processed. In a client these contain the
+	 * protocol that the server selected once the ServerHello has been
+	 * processed. */
+	unsigned char *alpn_selected;
+	unsigned alpn_selected_len;
+#endif	/* OPENSSL_NO_TLSEXT */
 	} SSL3_STATE;
 
 #endif
@@ -600,8 +606,6 @@ typedef struct ssl3_state_st
 #define SSL3_ST_CR_CERT_REQ_B		(0x151|SSL_ST_CONNECT)
 #define SSL3_ST_CR_SRVR_DONE_A		(0x160|SSL_ST_CONNECT)
 #define SSL3_ST_CR_SRVR_DONE_B		(0x161|SSL_ST_CONNECT)
-#define SSL3_ST_CR_SUPPLEMENTAL_DATA_A	(0x210|SSL_ST_CONNECT)
-#define SSL3_ST_CR_SUPPLEMENTAL_DATA_B  (0x211|SSL_ST_CONNECT)
 /* write to server */
 #define SSL3_ST_CW_CERT_A		(0x170|SSL_ST_CONNECT)
 #define SSL3_ST_CW_CERT_B		(0x171|SSL_ST_CONNECT)
@@ -641,6 +645,7 @@ typedef struct ssl3_state_st
 #define SSL3_ST_SR_CLNT_HELLO_A		(0x110|SSL_ST_ACCEPT)
 #define SSL3_ST_SR_CLNT_HELLO_B		(0x111|SSL_ST_ACCEPT)
 #define SSL3_ST_SR_CLNT_HELLO_C		(0x112|SSL_ST_ACCEPT)
+#define SSL3_ST_SR_CLNT_HELLO_D		(0x115|SSL_ST_ACCEPT)
 /* write to client */
 #define DTLS1_ST_SW_HELLO_VERIFY_REQUEST_A (0x113|SSL_ST_ACCEPT)
 #define DTLS1_ST_SW_HELLO_VERIFY_REQUEST_B (0x114|SSL_ST_ACCEPT)
@@ -681,8 +686,6 @@ typedef struct ssl3_state_st
 #define SSL3_ST_SW_SESSION_TICKET_B	(0x1F1|SSL_ST_ACCEPT)
 #define SSL3_ST_SW_CERT_STATUS_A	(0x200|SSL_ST_ACCEPT)
 #define SSL3_ST_SW_CERT_STATUS_B	(0x201|SSL_ST_ACCEPT)
-#define SSL3_ST_SW_SUPPLEMENTAL_DATA_A	(0x220|SSL_ST_ACCEPT)
-#define SSL3_ST_SW_SUPPLEMENTAL_DATA_B	(0x221|SSL_ST_ACCEPT)
 
 #define SSL3_MT_HELLO_REQUEST			0
 #define SSL3_MT_CLIENT_HELLO			1
@@ -696,7 +699,6 @@ typedef struct ssl3_state_st
 #define SSL3_MT_CLIENT_KEY_EXCHANGE		16
 #define SSL3_MT_FINISHED			20
 #define SSL3_MT_CERTIFICATE_STATUS		22
-#define SSL3_MT_SUPPLEMENTAL_DATA		23
 #ifndef OPENSSL_NO_NEXTPROTONEG
 #define SSL3_MT_NEXT_PROTO			67
 #endif

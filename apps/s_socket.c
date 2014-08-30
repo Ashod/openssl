@@ -274,7 +274,7 @@ static int init_client_ip(int *sock, unsigned char ip[4], int port, int type)
 		{
 		i=0;
 		i=setsockopt(s,SOL_SOCKET,SO_KEEPALIVE,(char *)&i,sizeof(i));
-		if (i < 0) { perror("keepalive"); return(0); }
+		if (i < 0) { closesocket(s); perror("keepalive"); return(0); }
 		}
 #endif
 
@@ -284,7 +284,7 @@ static int init_client_ip(int *sock, unsigned char ip[4], int port, int type)
 	return(1);
 	}
 
-int do_server(int port, int type, int *ret, int (*cb)(char *hostname, int s, unsigned char *context), unsigned char *context)
+int do_server(int port, int type, int *ret, int (*cb)(char *hostname, int s, int stype, unsigned char *context), unsigned char *context, int naccept)
 	{
 	int sock;
 	char *name = NULL;
@@ -310,11 +310,13 @@ int do_server(int port, int type, int *ret, int (*cb)(char *hostname, int s, uns
 			}
 		else
 			sock = accept_socket;
-		i=(*cb)(name,sock, context);
+		i=(*cb)(name,sock, type, context);
 		if (name != NULL) OPENSSL_free(name);
 		if (type==SOCK_STREAM)
 			SHUTDOWN2(sock);
-		if (i < 0)
+		if (naccept != -1)
+			naccept--;
+		if (i < 0 || naccept == 0)
 			{
 			SHUTDOWN2(accept_socket);
 			return(i);
@@ -450,6 +452,7 @@ redoit:
 		if ((*host=(char *)OPENSSL_malloc(strlen(h1->h_name)+1)) == NULL)
 			{
 			perror("OPENSSL_malloc");
+			closesocket(ret);
 			return(0);
 			}
 		BUF_strlcpy(*host,h1->h_name,strlen(h1->h_name)+1);
@@ -458,11 +461,13 @@ redoit:
 		if (h2 == NULL)
 			{
 			BIO_printf(bio_err,"gethostbyname failure\n");
+			closesocket(ret);
 			return(0);
 			}
 		if (h2->h_addrtype != AF_INET)
 			{
 			BIO_printf(bio_err,"gethostbyname addr is not AF_INET\n");
+			closesocket(ret);
 			return(0);
 			}
 		}

@@ -178,11 +178,24 @@ unsigned long X509_subject_name_hash_old(X509 *x)
  */
 int X509_cmp(const X509 *a, const X509 *b)
 {
+	int rv;
 	/* ensure hash is valid */
 	X509_check_purpose((X509 *)a, -1, 0);
 	X509_check_purpose((X509 *)b, -1, 0);
 
-	return memcmp(a->sha1_hash, b->sha1_hash, SHA_DIGEST_LENGTH);
+	rv = memcmp(a->sha1_hash, b->sha1_hash, SHA_DIGEST_LENGTH);
+	if (rv)
+		return rv;
+	/* Check for match against stored encoding too */
+	if (!a->cert_info->enc.modified && !b->cert_info->enc.modified)
+		{
+		rv = (int)(a->cert_info->enc.len - b->cert_info->enc.len);
+		if (rv)
+			return rv;
+		return memcmp(a->cert_info->enc.enc, b->cert_info->enc.enc,
+				a->cert_info->enc.len);
+		}
+	return rv;
 }
 #endif
 
@@ -349,6 +362,8 @@ int X509_check_private_key(X509 *x, EVP_PKEY *k)
  * flags.
  */
 
+#ifndef OPENSSL_NO_EC
+
 static int check_suite_b(EVP_PKEY *pkey, int sign_nid, unsigned long *pflags)
 	{
 	const EC_GROUP *grp = NULL;
@@ -465,6 +480,20 @@ int X509_CRL_check_suiteb(X509_CRL *crl, EVP_PKEY *pk, unsigned long flags)
 	sign_nid = OBJ_obj2nid(crl->crl->sig_alg->algorithm);
 	return check_suite_b(pk, sign_nid, &flags);
 	}
+
+#else
+int X509_chain_check_suiteb(int *perror_depth, X509 *x, STACK_OF(X509) *chain,
+							unsigned long flags)
+	{
+	return 0;
+	}
+
+int X509_CRL_check_suiteb(X509_CRL *crl, EVP_PKEY *pk, unsigned long flags)
+	{
+	return 0;
+	}
+
+#endif
 /* Not strictly speaking an "up_ref" as a STACK doesn't have a reference
  * count but it has the same effect by duping the STACK and upping the ref
  * of each X509 structure.

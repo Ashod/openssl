@@ -206,11 +206,9 @@ extern "C" {
 #define TLSEXT_TYPE_status_request		5
 /* ExtensionType values from RFC4681 */
 #define TLSEXT_TYPE_user_mapping		6
-
 /* ExtensionType values from RFC5878 */
 #define TLSEXT_TYPE_client_authz		7
 #define TLSEXT_TYPE_server_authz		8
-
 /* ExtensionType values from RFC6091 */
 #define TLSEXT_TYPE_cert_type		9
 
@@ -229,6 +227,15 @@ extern "C" {
 
 /* ExtensionType value from RFC5620 */
 #define TLSEXT_TYPE_heartbeat	15
+
+/* ExtensionType value from draft-ietf-tls-applayerprotoneg-00 */
+#define TLSEXT_TYPE_application_layer_protocol_negotiation 16
+
+/* ExtensionType value for TLS padding extension.
+ * http://www.iana.org/assignments/tls-extensiontype-values/tls-extensiontype-values.xhtml
+ * http://tools.ietf.org/html/draft-agl-tls-padding-03
+ */
+#define TLSEXT_TYPE_padding	21
 
 /* ExtensionType value from RFC4507 */
 #define TLSEXT_TYPE_session_ticket		35
@@ -293,14 +300,6 @@ extern "C" {
 #ifndef OPENSSL_NO_TLSEXT
 
 #define TLSEXT_MAXLEN_host_name 255
-
-/* From RFC 5878 */
-#define TLSEXT_SUPPLEMENTALDATATYPE_authz_data 16386
-/* This is not IANA assigned. See
- * https://www.iana.org/assignments/tls-parameters/tls-parameters.xml#authorization-data-rules */
-#define TLSEXT_AUTHZDATAFORMAT_audit_proof 182
-
-#define TLSEXT_MAXLEN_supplemental_data 1024*16 /* Let's limit to 16k */
 
 const char *SSL_get_servername(const SSL *s, const int type);
 int SSL_get_servername_type(const SSL *s);
@@ -386,13 +385,6 @@ SSL_CTX_ctrl(ctx,SSL_CTRL_SET_TLSEXT_OPAQUE_PRF_INPUT_CB_ARG, 0, arg)
 
 #define SSL_CTX_set_tlsext_ticket_key_cb(ssl, cb) \
 SSL_CTX_callback_ctrl(ssl,SSL_CTRL_SET_TLSEXT_TICKET_KEY_CB,(void (*)(void))cb)
-
-/* Used by clients to process audit proofs. */
-#define SSL_CTX_set_tlsext_authz_server_audit_proof_cb(ctx, cb) \
-SSL_CTX_callback_ctrl(ctx, SSL_CTRL_SET_TLSEXT_AUTHZ_SERVER_AUDIT_PROOF_CB,(void (*)(void))cb)
-
-#define SSL_CTX_set_tlsext_authz_server_audit_proof_cb_arg(ctx, arg) \
-SSL_CTX_ctrl(ctx, SSL_CTRL_SET_TLSEXT_AUTHZ_SERVER_AUDIT_PROOF_CB_ARG, 0, arg);
 
 #ifndef OPENSSL_NO_HEARTBEATS
 #define SSL_TLSEXT_HB_ENABLED				0x01

@@ -113,11 +113,6 @@ that came with the version of OpenSSL you are using. The pod format
 documentation is included in each OpenSSL distribution under the docs
 directory.
 
-For information on parts of libcrypto that are not yet documented, you
-might want to read Ariel Glenn's documentation on SSLeay 0.9, OpenSSL's
-predecessor, at <URL: http://www.columbia.edu/~ariel/ssleay/>.  Much
-of this still applies to OpenSSL.
-
 There is some documentation about certificate extensions and PKCS#12
 in doc/openssl.txt
 
@@ -199,10 +194,8 @@ be 0.9.8za then 0.9.8zb and so on.
 
 * Do I need patent licenses to use OpenSSL?
 
-The patents section of the README file lists patents that may apply to
-you if you want to use OpenSSL.  For information on intellectual
-property rights, please consult a lawyer.  The OpenSSL team does not
-offer legal advice.
+For information on intellectual property rights, please consult a lawyer.
+The OpenSSL team does not offer legal advice.
 
 You can configure OpenSSL so as not to use IDEA, MDC2 and RC5 by using
  ./config no-idea no-mdc2 no-rc5
@@ -619,8 +612,8 @@ valid for the current DOS session.
 * What is special about OpenSSL on Redhat?
 
 Red Hat Linux (release 7.0 and later) include a preinstalled limited
-version of OpenSSL. For patent reasons, support for IDEA, RC5 and MDC2
-is disabled in this version. The same may apply to other Linux distributions.
+version of OpenSSL. Red Hat has chosen to disable support for IDEA, RC5 and
+MDC2 in this version. The same may apply to other Linux distributions.
 Users may therefore wish to install more or all of the features left out.
 
 To do this you MUST ensure that you do not overwrite the openssl that is in
@@ -642,11 +635,6 @@ relevant updates in packages up to and including 0.9.6b.
 
 A possible way around this is to persuade Red Hat to produce a non-US
 version of Red Hat Linux.
-
-FYI: Patent numbers and expiry dates of US patents:
-MDC-2: 4,908,861 13/03/2007
-IDEA:  5,214,703 25/05/2010
-RC5:   5,724,428 03/03/2015
 
 
 * Why does the OpenSSL compilation fail on MacOS X?
@@ -773,6 +761,9 @@ If you think your bug has security implications then please send it to
 openssl-security@openssl.org if you don't get a prompt reply at least 
 acknowledging receipt then resend or mail it directly to one of the
 more active team members (e.g. Steve).
+
+Note that bugs only present in the openssl utility are not in general
+considered to be security issues. 
 
 [PROG] ========================================================================
 

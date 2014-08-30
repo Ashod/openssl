@@ -110,12 +110,12 @@ static int make_ocsp_response(OCSP_RESPONSE **resp, OCSP_REQUEST *req, CA_DB *db
 			int nmin, int ndays, int badsig);
 
 static char **lookup_serial(CA_DB *db, ASN1_INTEGER *ser);
-static BIO *init_responder(char *port);
-static int do_responder(OCSP_REQUEST **preq, BIO **pcbio, BIO *acbio, char *port);
+static BIO *init_responder(const char *port);
+static int do_responder(OCSP_REQUEST **preq, BIO **pcbio, BIO *acbio, const char *port);
 static int send_ocsp_response(BIO *cbio, OCSP_RESPONSE *resp);
-static OCSP_RESPONSE *query_responder(BIO *err, BIO *cbio, char *path,
-				STACK_OF(CONF_VALUE) *headers,
-				OCSP_REQUEST *req, int req_timeout);
+static OCSP_RESPONSE *query_responder(BIO *err, BIO *cbio, const char *path,
+				      const STACK_OF(CONF_VALUE) *headers,
+				      OCSP_REQUEST *req, int req_timeout);
 
 #undef PROG
 #define PROG ocsp_main
@@ -127,6 +127,7 @@ int MAIN(int argc, char **argv)
 	ENGINE *e = NULL;
 	char **args;
 	char *host = NULL, *port = NULL, *path = "/";
+	char *thost = NULL, *tport = NULL, *tpath = NULL;
 	char *reqin = NULL, *respin = NULL;
 	char *reqout = NULL, *respout = NULL;
 	char *signfile = NULL, *keyfile = NULL;
@@ -206,6 +207,12 @@ int MAIN(int argc, char **argv)
 			}
 		else if (!strcmp(*args, "-url"))
 			{
+			if (thost)
+				OPENSSL_free(thost);
+			if (tport)
+				OPENSSL_free(tport);
+			if (tpath)
+				OPENSSL_free(tpath);
 			if (args[1])
 				{
 				args++;
@@ -214,6 +221,9 @@ int MAIN(int argc, char **argv)
 					BIO_printf(bio_err, "Error parsing URL\n");
 					badarg = 1;
 					}
+				thost = host;
+				tport = port;
+				tpath = path;
 				}
 			else badarg = 1;
 			}
@@ -963,12 +973,12 @@ end:
 	sk_X509_pop_free(verify_other, X509_free);
 	sk_CONF_VALUE_pop_free(headers, X509V3_conf_free);
 
-	if (use_ssl != -1)
-		{
-		OPENSSL_free(host);
-		OPENSSL_free(port);
-		OPENSSL_free(path);
-		}
+	if (thost)
+		OPENSSL_free(thost);
+	if (tport)
+		OPENSSL_free(tport);
+	if (tpath)
+		OPENSSL_free(tpath);
 
 	OPENSSL_EXIT(ret);
 }
@@ -1223,7 +1233,7 @@ static char **lookup_serial(CA_DB *db, ASN1_INTEGER *ser)
 
 /* Quick and dirty OCSP server: read in and parse input request */
 
-static BIO *init_responder(char *port)
+static BIO *init_responder(const char *port)
 	{
 	BIO *acbio = NULL, *bufbio = NULL;
 	bufbio = BIO_new(BIO_f_buffer());
@@ -1254,7 +1264,8 @@ static BIO *init_responder(char *port)
 	return NULL;
 	}
 
-static int do_responder(OCSP_REQUEST **preq, BIO **pcbio, BIO *acbio, char *port)
+static int do_responder(OCSP_REQUEST **preq, BIO **pcbio, BIO *acbio,
+			const char *port)
 	{
 	int have_post = 0, len;
 	OCSP_REQUEST *req = NULL;
@@ -1320,9 +1331,9 @@ static int send_ocsp_response(BIO *cbio, OCSP_RESPONSE *resp)
 	return 1;
 	}
 
-static OCSP_RESPONSE *query_responder(BIO *err, BIO *cbio, char *path,
-				STACK_OF(CONF_VALUE) *headers,
-				OCSP_REQUEST *req, int req_timeout)
+static OCSP_RESPONSE *query_responder(BIO *err, BIO *cbio, const char *path,
+				      const STACK_OF(CONF_VALUE) *headers,
+				      OCSP_REQUEST *req, int req_timeout)
 	{
 	int fd;
 	int rv;
@@ -1418,9 +1429,10 @@ static OCSP_RESPONSE *query_responder(BIO *err, BIO *cbio, char *path,
 	}
 
 OCSP_RESPONSE *process_responder(BIO *err, OCSP_REQUEST *req,
-			char *host, char *path, char *port, int use_ssl,
-			STACK_OF(CONF_VALUE) *headers,
-			int req_timeout)
+				 const char *host, const char *path,
+				 const char *port, int use_ssl,
+				 const STACK_OF(CONF_VALUE) *headers,
+				 int req_timeout)
 	{
 	BIO *cbio = NULL;
 	SSL_CTX *ctx = NULL;
@@ -1456,7 +1468,7 @@ OCSP_RESPONSE *process_responder(BIO *err, OCSP_REQUEST *req,
 		}
 	resp = query_responder(err, cbio, path, headers, req, req_timeout);
 	if (!resp)
-		BIO_printf(bio_err, "Error querying OCSP responsder\n");
+		BIO_printf(bio_err, "Error querying OCSP responder\n");
 	end:
 	if (cbio)
 		BIO_free_all(cbio);

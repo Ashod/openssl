@@ -71,7 +71,6 @@ typedef struct
 	do_ssl_trace_list(bio, indent, msg, msglen, value, \
 	 table, sizeof(table)/sizeof(ssl_trace_tbl))
  
-
 static const char *do_ssl_trace_str(int val, ssl_trace_tbl *tbl, size_t ntbl)
 	{
 	size_t i;
@@ -113,6 +112,7 @@ static ssl_trace_tbl ssl_version_tbl[] = {
 	{TLS1_1_VERSION,	"TLS 1.1"},
 	{TLS1_2_VERSION,	"TLS 1.2"},
 	{DTLS1_VERSION,		"DTLS 1.0"},
+	{DTLS1_2_VERSION,	"DTLS 1.2"},
 	{DTLS1_BAD_VER,		"DTLS 1.0 (bad)"}
 };
 
@@ -365,7 +365,8 @@ static ssl_trace_tbl ssl_exts_tbl[] = {
 	{TLSEXT_TYPE_opaque_prf_input, "opaque_prf_input"},
 #endif
 	{TLSEXT_TYPE_renegotiate, "renegotiate"},
-	{TLSEXT_TYPE_next_proto_neg, "next_proto_neg"}
+	{TLSEXT_TYPE_next_proto_neg, "next_proto_neg"},
+	{TLSEXT_TYPE_padding, "padding"}
 };
 
 static ssl_trace_tbl ssl_curve_tbl[] = {
@@ -394,6 +395,9 @@ static ssl_trace_tbl ssl_curve_tbl[] = {
 	{23, "secp256r1 (P-256)"},
 	{24, "secp384r1 (P-384)"},
 	{25, "secp521r1 (P-521)"},
+	{26, "brainpoolP256r1"},
+	{27, "brainpoolP384r1"},
+	{28, "brainpoolP512r1"},
 	{0xFF01, "arbitrary_explicit_prime_curves"},
 	{0xFF02, "arbitrary_explicit_char2_curves"}
 };
@@ -532,7 +536,7 @@ static int ssl_print_signature(BIO *bio, int indent, SSL *s,
 	{
 	if (*pmsglen < 2)
 		return 0;
-	if (TLS1_get_version(s) >= TLS1_2_VERSION)
+	if (SSL_USE_SIGALGS(s))
 		{
 		const unsigned char *p = *pmsg;
 		BIO_indent(bio, indent, 80);
@@ -683,7 +687,7 @@ static int ssl_print_extensions(BIO *bio, int indent, int server,
 	return 1;
 	}
 
-static int ssl_print_client_hello(BIO *bio, int indent,
+static int ssl_print_client_hello(BIO *bio, SSL *ssl, int indent,
 				const unsigned char *msg, size_t msglen)
 	{
 	size_t len;
@@ -694,6 +698,11 @@ static int ssl_print_client_hello(BIO *bio, int indent,
 		return 0;
 	if (!ssl_print_hexbuf(bio, indent, "session_id", 1, &msg, &msglen))
 		return 0;
+	if (SSL_IS_DTLS(ssl))
+		{
+		if (!ssl_print_hexbuf(bio, indent, "cookie", 1, &msg, &msglen))
+			return 0;
+		}
 	if (msglen < 2)
 		return 0;
 	len = (msg[0] << 8) | msg[1];
@@ -734,6 +743,16 @@ static int ssl_print_client_hello(BIO *bio, int indent,
 		len--;
 		}
 	if (!ssl_print_extensions(bio, indent, 0, msg, msglen))
+		return 0;
+	return 1;
+	}
+
+static int dtls_print_hello_vfyrequest(BIO *bio, int indent,
+				const unsigned char *msg, size_t msglen)
+	{
+	if (!ssl_print_version(bio, indent, "server_version", &msg, &msglen))
+		return 0;
+	if (!ssl_print_hexbuf(bio, indent, "cookie", 1, &msg, &msglen))
 		return 0;
 	return 1;
 	}
@@ -1032,7 +1051,7 @@ static int ssl_print_cert_request(BIO *bio, int indent, SSL *s,
 		return 0;
 	msg += xlen;
 	msglen -= xlen + 1;
-	if (TLS1_get_version(s) < TLS1_2_VERSION)
+	if (!SSL_USE_SIGALGS(s))
 		goto skip_sig;
 	if (msglen < 2)
 		return 0;
@@ -1118,6 +1137,7 @@ static int ssl_print_ticket(BIO *bio, int indent,
 	return 1;
 	}
 
+
 static int ssl_print_handshake(BIO *bio, SSL *ssl,
 				const unsigned char *msg, size_t msglen,
 				int indent)
@@ -1134,12 +1154,30 @@ static int ssl_print_handshake(BIO *bio, SSL *ssl,
 				(int)hlen);
 	msg += 4;
 	msglen -= 4;
+	if (SSL_IS_DTLS(ssl))
+		{
+		if (msglen < 8)
+			return 0;
+		BIO_indent(bio, indent, 80);
+		BIO_printf(bio, "message_seq=%d, fragment_offset=%d, "
+				"fragment_length=%d\n",
+				(msg[0] << 8) | msg[1],
+				(msg[2] << 16) | (msg[3] << 8) | msg[4],
+				(msg[5] << 16) | (msg[6] << 8) | msg[7]);
+		msg += 8;
+		msglen -= 8;
+		}
 	if (msglen < hlen)
 		return 0;
 	switch(htype)
 		{
 	case SSL3_MT_CLIENT_HELLO:
-		if (!ssl_print_client_hello(bio, indent + 2, msg, msglen))
+		if (!ssl_print_client_hello(bio, ssl, indent + 2, msg, msglen))
+			return 0;
+		break;
+
+	case DTLS1_MT_HELLO_VERIFY_REQUEST:
+		if (!dtls_print_hello_vfyrequest(bio, indent + 2, msg, msglen))
 			return 0;
 		break;
 
@@ -1241,9 +1279,26 @@ void SSL_trace(int write_p, int version, int content_type,
 		BIO_puts(bio, write_p ? "Sent" : "Received");
 		BIO_printf(bio, " Record\nHeader:\n  Version = %s (0x%x)\n",
 				ssl_trace_str(hvers, ssl_version_tbl), hvers);
+		if (SSL_IS_DTLS(ssl))
+			{
+			BIO_printf(bio,
+				"  epoch=%d, sequence_number=%04x%04x%04x\n",
+					(msg[3] << 8 | msg[4]),
+					(msg[5] << 8 | msg[6]),
+					(msg[7] << 8 | msg[8]),
+					(msg[9] << 8 | msg[10]));
+#if 0
+			/* Just print handshake type so we can see what is
+			 * going on during fragmentation.
+			 */
+			BIO_printf(bio, "(%s)\n",
+				ssl_trace_str(msg[msglen], ssl_handshake_tbl));
+#endif
+			}
+
 		BIO_printf(bio, "  Content Type = %s (%d)\n  Length = %d",
 				ssl_trace_str(msg[0], ssl_content_tbl), msg[0],
-				msg[3] << 8 | msg[4]);
+				msg[msglen - 2] << 8 | msg[msglen - 1]);
 		}
 		break;
 	case SSL3_RT_HANDSHAKE:

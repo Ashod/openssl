@@ -26,11 +26,14 @@ typedef unsigned int u32;
 typedef unsigned char u8;
 
 #define STRICT_ALIGNMENT 1
+#ifndef PEDANTIC
 #if defined(__i386)	|| defined(__i386__)	|| \
     defined(__x86_64)	|| defined(__x86_64__)	|| \
     defined(_M_IX86)	|| defined(_M_AMD64)	|| defined(_M_X64) || \
+    defined(__aarch64__)			|| \
     defined(__s390__)	|| defined(__s390x__)
 # undef STRICT_ALIGNMENT
+#endif
 #endif
 
 #if !defined(PEDANTIC) && !defined(OPENSSL_NO_ASM) && !defined(OPENSSL_NO_INLINE_ASM)
@@ -50,6 +53,13 @@ typedef unsigned char u8;
 #  define BSWAP4(x) ({	u32 ret=(x);			\
 			asm ("bswapl %0"		\
 			: "+r"(ret));	ret;		})
+# elif defined(__aarch64__)
+#  define BSWAP8(x) ({	u64 ret;			\
+			asm ("rev %0,%1"		\
+			: "=r"(ret) : "r"(x)); ret;	})
+#  define BSWAP4(x) ({	u32 ret;			\
+			asm ("rev %w0,%w1"		\
+			: "=r"(ret) : "r"(x)); ret;	})
 # elif (defined(__arm__) || defined(__arm)) && !defined(STRICT_ALIGNMENT)
 #  define BSWAP8(x) ({	u32 lo=(u64)(x)>>32,hi=(x);	\
 			asm ("rev %0,%0; rev %1,%1"	\
@@ -98,8 +108,8 @@ typedef struct { u64 hi,lo; } u128;
 
 struct gcm128_context {
 	/* Following 6 names follow names in GCM specification */
-	union { u64 u[2]; u32 d[4]; u8 c[16]; }	Yi,EKi,EK0,len,
-						Xi,H;
+	union { u64 u[2]; u32 d[4]; u8 c[16]; size_t t[16/sizeof(size_t)]; }
+	  Yi,EKi,EK0,len,Xi,H;
 	/* Relative position of Xi, H and pre-computed Htable is used
 	 * in some assembler modules, i.e. don't change the order! */
 #if TABLE_BITS==8

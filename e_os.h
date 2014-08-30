@@ -270,7 +270,7 @@ extern "C" {
 	*/
 #      define _WIN32_WINNT 0x0400
 #    endif
-#    if !defined(OPENSSL_NO_SOCK) && defined(_WIN32_WINNT)
+#    if !defined(OPENSSL_NO_SOCK) && (defined(_WIN32_WINNT) || defined(_WIN32_WCE))
        /*
         * Just like defining _WIN32_WINNT including winsock2.h implies
         * certain "discipline" for maintaining [broad] binary compatibility.
@@ -286,6 +286,9 @@ extern "C" {
 #    include <stdio.h>
 #    include <stddef.h>
 #    include <errno.h>
+#    if defined(_WIN32_WCE) && !defined(EACCES)
+#      define EACCES   13
+#    endif
 #    include <string.h>
 #    ifdef _WIN64
 #      define strlen(s) _strlen31(s)
@@ -307,7 +310,7 @@ static unsigned int _strlen31(const char *str)
 #      undef isxdigit
 #    endif
 #    if defined(_MSC_VER) && !defined(_WIN32_WCE) && !defined(_DLL) && defined(stdin)
-#      if _MSC_VER>=1300
+#      if _MSC_VER>=1300 && _MSC_VER<1600
 #        undef stdin
 #        undef stdout
 #        undef stderr
@@ -315,7 +318,7 @@ static unsigned int _strlen31(const char *str)
 #        define stdin  (&__iob_func()[0])
 #        define stdout (&__iob_func()[1])
 #        define stderr (&__iob_func()[2])
-#      elif defined(I_CAN_LIVE_WITH_LNK4049)
+#      elif _MSC_VER<1300 && defined(I_CAN_LIVE_WITH_LNK4049)
 #        undef stdin
 #        undef stdout
 #        undef stderr
@@ -367,6 +370,22 @@ static unsigned int _strlen31(const char *str)
 #  else
 #    define DEFAULT_HOME  "C:"
 #  endif
+
+/* Avoid Windows 8 SDK GetVersion deprecated problems */
+#if defined(_MSC_VER) && _MSC_VER>=1800
+#  define check_winnt() (1)
+#else
+#  define check_winnt() (GetVersion() < 0x80000000)
+#endif
+
+/*
+ * Visual Studio: inline is available in C++ only, however
+ * __inline is available for C, see
+ * http://msdn.microsoft.com/en-us/library/z8y1yy88.aspx
+ */
+#if defined(_MSC_VER) && !defined(__cplusplus) && !defined(inline)
+#  define inline __inline
+#endif
 
 #else /* The non-microsoft world */
 
@@ -731,4 +750,3 @@ struct servent *getservbyname(const char *name, const char *proto);
 #endif
 
 #endif
-

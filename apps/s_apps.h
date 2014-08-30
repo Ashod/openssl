@@ -148,7 +148,7 @@ typedef fd_mask fd_set;
 #define PORT_STR        "4433"
 #define PROTOCOL        "tcp"
 
-int do_server(int port, int type, int *ret, int (*cb) (char *hostname, int s, unsigned char *context), unsigned char *context);
+int do_server(int port, int type, int *ret, int (*cb) (char *hostname, int s, int stype, unsigned char *context), unsigned char *context, int naccept);
 #ifdef HEADER_X509_H
 int MS_CALLBACK verify_callback(int ok, X509_STORE_CTX *ctx);
 #endif
@@ -156,13 +156,9 @@ int MS_CALLBACK verify_callback(int ok, X509_STORE_CTX *ctx);
 int set_cert_stuff(SSL_CTX *ctx, char *cert_file, char *key_file);
 int set_cert_key_stuff(SSL_CTX *ctx, X509 *cert, EVP_PKEY *key,
 					STACK_OF(X509) *chain, int build_chain);
-# ifndef OPENSSL_NO_TLSEXT
-int set_cert_key_and_authz(SSL_CTX *ctx, X509 *cert, EVP_PKEY *key,
-                           unsigned char *authz, size_t authz_length);
-# endif
 int ssl_print_sigalgs(BIO *out, SSL *s);
 int ssl_print_point_formats(BIO *out, SSL *s);
-int ssl_print_curves(BIO *out, SSL *s);
+int ssl_print_curves(BIO *out, SSL *s, int noshared);
 #endif
 int ssl_print_tmp_key(BIO *out, SSL *s);
 int init_client(int *sock, char *server, int port, int type);
@@ -191,6 +187,7 @@ void ssl_excert_free(SSL_EXCERT *exc);
 int args_excert(char ***pargs, int *pargc,
 			int *badarg, BIO *err, SSL_EXCERT **pexc);
 int load_excert(SSL_EXCERT **pexc, BIO *err);
+void print_ssl_summary(BIO *bio, SSL *s);
 #ifdef HEADER_SSL_H
 int args_ssl(char ***pargs, int *pargc, SSL_CONF_CTX *cctx,
 			int *badarg, BIO *err, STACK_OF(OPENSSL_STRING) **pstr);
